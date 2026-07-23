@@ -388,10 +388,12 @@ class WorldModel(nn.Module):
         macro_cfg = getattr(config.Models.WorldModel, 'MacroLoss', {})
         macro_enable = getattr(macro_cfg, 'Enable', False)
         if MacroLoss is not None and macro_enable:
+            buffer_max_length = getattr(config.BasicSettings, 'BufferMaxLength', 100000)
             self.macro_loss = MacroLoss(
                 latent_dim=self.stoch_flattened_dim,
                 config=macro_cfg,
-                full_latent_dim=self.stoch_flattened_dim
+                full_latent_dim=self.stoch_flattened_dim,
+                buffer_max_length=buffer_max_length
             ).to(device)
             # Add macro_loss parameters to the optimizer if needed, or let it have its own? 
             # In grad_research it was part of world_model.parameters(). 

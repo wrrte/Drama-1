@@ -73,8 +73,8 @@ Models:
       MaxRelativeThresholdDecay: 0.999
       HashBits: 10
       MaxQueuePerKey: 100000
-      MaxPastSamples: 32
-      MaxPairsPerBatch: 256
+      MaxPastSamples: 16
+      MaxPairsPerBatch: 2048
       LossScale: 10
       LazyRebuild:
         Enable: true

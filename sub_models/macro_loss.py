@@ -13,75 +13,8 @@ def symexp(x):
     """SymLog 공간의 값을 원래 스케일로 복원합니다."""
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
 
-class FastHashBucket:
-    """O(N) 병목을 제거하고 완전한 O(1) 연산을 지원하는 딕셔너리 기반 해시 버킷"""
-    def __init__(self, max_size):
-        self.max_size = max_size
-        self.items = [] # 랜덤 샘플링을 위한 리스트 (index 저장)
-        self.data_map = {} # dict mapping index_item -> (metric, latent, list_index)
-
-    def add_or_update(self, index, metric, latent):
-        """데이터를 추가하거나 업데이트하며, 용량 초과로 삭제된 인덱스가 있다면 반환합니다."""
-        if index in self.data_map:
-            # Update
-            _, _, list_idx = self.data_map[index]
-            self.data_map[index] = (metric, latent, list_idx)
-            return None
-        
-        if len(self.items) < self.max_size:
-            list_idx = len(self.items)
-            self.items.append(index)
-            self.data_map[index] = (metric, latent, list_idx)
-            return None
-        else:
-            # Replace randomly
-            replace_list_idx = random.randrange(self.max_size)
-            old_index = self.items[replace_list_idx]
-            del self.data_map[old_index]
-            
-            self.items[replace_list_idx] = index
-            self.data_map[index] = (metric, latent, replace_list_idx)
-            return old_index
-
-    def remove(self, index):
-        """특정 인덱스를 O(1) 시간에 삭제합니다."""
-        if index not in self.data_map:
-            return
-        _, _, list_idx = self.data_map[index]
-        last_index = self.items[-1]
-        
-        # swap with last
-        self.items[list_idx] = last_index
-        last_metric, last_lat, _ = self.data_map[last_index]
-        self.data_map[last_index] = (last_metric, last_lat, list_idx)
-        
-        self.items.pop()
-        del self.data_map[index]
-
-    def sample_and_remove(self, k):
-        if not self.items:
-            return []
-        k = min(k, len(self.items))
-        indices = random.sample(self.items, k)
-        
-        samples = []
-        for idx in indices:
-            metric, latent, _ = self.data_map[idx]
-            samples.append((idx, metric, latent))
-            self.remove(idx)
-            
-        return samples
-
-    def items_gen(self):
-        for idx, (metric, latent, _) in self.data_map.items():
-            yield (idx, metric, latent)
-
-    def __len__(self):
-        return len(self.items)
-
-
 class MacroLoss(nn.Module):
-    def __init__(self, latent_dim, config, full_latent_dim=None):
+    def __init__(self, latent_dim, config, full_latent_dim=None, buffer_max_length=1000000):
         super().__init__()
         cfg = config or {}
         self.enabled = bool(cfg.get("Enable", False))
@@ -125,14 +58,24 @@ class MacroLoss(nn.Module):
         # 훈련 재개 시에도 역대 최대치를 잊지 않도록 persistent=True로 등록합니다.
         self.register_buffer("running_max_trigger_metric", torch.tensor(1e-8, dtype=torch.float32), persistent=True)
         
-        # [추가] 1M개의 Replay Buffer 인덱스를 커버하는 해시 버킷 추적 맵 (16비트 정수, 약 2MB)
-        self.register_buffer("index_to_bucket", torch.full((1000000,), -1, dtype=torch.int16), persistent=False)
-        # ------------------------------------------
-
+        # [수정] Tensor-based Hash Table을 위한 전역 버퍼 할당
+        self.buffer_max_length = buffer_max_length
         self.hash_bits = int(cfg.get("HashBits", 12))
+        self.num_buckets = 2 ** self.hash_bits
         self.max_queue_per_key = int(cfg.get("MaxQueuePerKey", 100000))
         self.max_past_samples = int(cfg.get("MaxPastSamples", 4))
         self.max_pairs_per_batch = int(cfg.get("MaxPairsPerBatch", 256))
+        
+        # Global storage (CPU)
+        self.register_buffer("item_metrics", torch.zeros(buffer_max_length, dtype=torch.float32), persistent=False)
+        self.register_buffer("item_latents", torch.zeros((buffer_max_length, latent_dim), dtype=torch.float32), persistent=False)
+        self.register_buffer("item_bucket", torch.full((buffer_max_length,), -1, dtype=torch.int32), persistent=False)
+        
+        # Bucket Queues (FIFO)
+        self.register_buffer("bucket_queues", torch.full((self.num_buckets, self.max_queue_per_key), -1, dtype=torch.int64), persistent=False)
+        self.register_buffer("bucket_head", torch.zeros(self.num_buckets, dtype=torch.int32), persistent=False)
+        self.register_buffer("bucket_size", torch.zeros(self.num_buckets, dtype=torch.int32), persistent=False)
+        # ------------------------------------------
         
         # --- [수정된 부분] 특정 스텝 이후 비활성화 설정 및 Soft Margin 추가 ---
         self.loss_scale = float(cfg.get("LossScale", 1.0))
@@ -183,7 +126,7 @@ class MacroLoss(nn.Module):
         bit_values = 2 ** torch.arange(self.hash_bits, dtype=torch.int64)
         self.register_buffer("hash_bit_values", bit_values, persistent=False)
 
-        self.hash_memory = {}
+        # self.hash_memory = {} (삭제됨)
         
         if self.trigger_type == "td_error":
             self.register_buffer("td_error_mean", torch.tensor(0.0, dtype=torch.float64))
@@ -269,12 +212,12 @@ class MacroLoss(nn.Module):
 
     def _hash_keys(self, latent):
         if latent.numel() == 0:
-            return []
+            return torch.empty((0,), dtype=torch.int64, device=latent.device)
         scores = latent.float() @ self.hash_proj.float()
         bits = scores > 0
         bit_values = self.hash_bit_values.to(bits.device)
         keys = (bits.to(torch.int64) * bit_values).sum(dim=-1)
-        return keys.detach().cpu().tolist()
+        return keys.detach()
 
     def _update_memory(self, obs, reward, latent, reward_mean, reward_std, td_error=None, value=None, aux_value=None, indexes=None):
         if not self.enabled or indexes is None:
@@ -362,72 +305,64 @@ class MacroLoss(nn.Module):
         else:
             metric_to_store = reward
 
-        indexes_cpu = indexes.detach().cpu()
-        metric_cpu = metric_to_store.detach().cpu()
-        store_mask_cpu = store_mask.detach().cpu()
+
         
         latent_masked = latent.detach()[store_mask]
         keys = self._hash_keys(latent_masked)
-        if not keys:
+        if len(keys) == 0:
             return
 
-        index_items = indexes_cpu[store_mask_cpu]
-        metric_items = metric_cpu[store_mask_cpu]
-        latent_cpu = latent_masked.detach().cpu()
+        index_items = indexes[store_mask]
+        metric_items = metric_to_store[store_mask]
 
-        # 동적 크기 조정
-        max_idx = int(indexes_cpu.max().item()) if indexes_cpu.numel() > 0 else -1
-        if max_idx >= self.index_to_bucket.size(0):
-            new_size = max(self.index_to_bucket.size(0) * 2, max_idx + 10000)
-            new_buffer = torch.full((new_size,), -1, dtype=torch.int16, device=self.index_to_bucket.device)
-            new_buffer[:self.index_to_bucket.size(0)] = self.index_to_bucket
-            self.register_buffer("index_to_bucket", new_buffer, persistent=False)
+        idx_ints = index_items.long()
+        keys_int = keys.to(torch.int32)
+        
+        # Global storage 업데이트 (GPU 병렬화)
+        self.item_metrics[idx_ints] = metric_items.to(self.item_metrics.dtype)
+        self.item_latents[idx_ints] = latent_masked.detach().to(self.item_latents.dtype)
+        self.item_bucket[idx_ints] = keys_int
+        
+        # FIFO Queue 순차 삽입
+        for i in range(len(keys)):
+            k = int(keys_int[i].item())
+            idx = int(idx_ints[i].item())
             
-        for key, index_item, metric_item, lat in zip(keys, index_items, metric_items, latent_cpu):
-            idx_int = int(index_item)
-            old_key = self.index_to_bucket[idx_int].item()
+            head = int(self.bucket_head[k].item())
+            self.bucket_queues[k, head] = idx
+            self.bucket_head[k] = (head + 1) % self.max_queue_per_key
             
-            if old_key != -1 and old_key != key:
-                old_queue = self.hash_memory.get(old_key)
-                if old_queue is not None:
-                    old_queue.remove(idx_int)
-                    
-            queue = self.hash_memory.get(key)
-            if queue is None:
-                queue = FastHashBucket(max_size=self.max_queue_per_key)
-                self.hash_memory[key] = queue
-                
-            evicted_idx = queue.add_or_update(idx_int, float(metric_item), lat)
-            if evicted_idx is not None:
-                self.index_to_bucket[evicted_idx] = -1
-                
-            self.index_to_bucket[idx_int] = key
+            s = int(self.bucket_size[k].item())
+            if s < self.max_queue_per_key:
+                self.bucket_size[k] = s + 1
 
     def _rebuild_all_hash_buckets(self, replay_buffer, encode_fn, latent_dtype=torch.float32, extra_items=None):
         self.global_rebuild_count += 1
-        all_items = []
-        for key, queue in self.hash_memory.items():
-            for item in queue.items_gen():
-                all_items.append(item)
-                
+        
+        valid_mask = self.item_bucket != -1
+        valid_indices = torch.where(valid_mask)[0]
+        all_indices = valid_indices.tolist()
+        
         if extra_items:
-            all_items.extend(extra_items)
-                
-        if not all_items:
+            all_indices.extend([x[0] for x in extra_items])
+            
+        if not all_indices:
             return
             
-        self.hash_memory.clear()
-        self.index_to_bucket.fill_(-1)
+        # Reset buckets
+        self.bucket_queues.fill_(-1)
+        self.bucket_head.zero_()
+        self.bucket_size.zero_()
+        self.item_bucket.fill_(-1)
         
-        for i in range(0, len(all_items), self.rebuild_batch_size):
-            batch_items = all_items[i:i+self.rebuild_batch_size]
-            indices = [x[0] for x in batch_items]
-            metrics = [x[1] for x in batch_items]
+        for i in range(0, len(all_indices), self.rebuild_batch_size):
+            indices = all_indices[i:i+self.rebuild_batch_size]
             
             if replay_buffer.store_on_gpu:
                 obs_raw = replay_buffer.obs_buffer[indices]
             else:
-                obs_raw = torch.from_numpy(replay_buffer.obs_buffer[indices])
+                idx_tensor = torch.tensor(indices, dtype=torch.long)
+                obs_raw = torch.from_numpy(replay_buffer.obs_buffer[idx_tensor])
                 
             obs = obs_raw.to(device=self.hash_proj.device, dtype=latent_dtype) / 255.0
             obs = rearrange(obs, "N H W C -> N 1 C H W")
@@ -441,33 +376,24 @@ class MacroLoss(nn.Module):
                 latent = latent.squeeze(1).detach()
                 
             keys = self._hash_keys(latent)
-            latent_cpu = latent.cpu()
             
-            # 동적 크기 조정
-            max_idx = max(indices) if indices else -1
-            if max_idx >= self.index_to_bucket.size(0):
-                new_size = max(self.index_to_bucket.size(0) * 2, max_idx + 10000)
-                new_buffer = torch.full((new_size,), -1, dtype=torch.int16, device=self.index_to_bucket.device)
-                new_buffer[:self.index_to_bucket.size(0)] = self.index_to_bucket
-                self.register_buffer("index_to_bucket", new_buffer, persistent=False)
+            idx_ints = indices_tensor.long()
+            keys_int = keys.to(torch.int32)
+            
+            self.item_latents[idx_ints] = latent.detach().to(self.item_latents.dtype)
+            self.item_bucket[idx_ints] = keys_int
+            
+            for j in range(len(keys)):
+                k = int(keys_int[j].item())
+                idx = int(idx_ints[j].item())
                 
-            for j, key in enumerate(keys):
-                idx_int = int(indices[j])
-                queue = self.hash_memory.get(key)
-                if queue is None:
-                    queue = FastHashBucket(max_size=self.max_queue_per_key)
-                    self.hash_memory[key] = queue
+                head = int(self.bucket_head[k].item())
+                self.bucket_queues[k, head] = idx
+                self.bucket_head[k] = (head + 1) % self.max_queue_per_key
                 
-                old_key = self.index_to_bucket[idx_int].item()
-                if old_key != -1 and old_key != key:
-                    old_queue = self.hash_memory.get(old_key)
-                    if old_queue is not None:
-                        old_queue.remove(idx_int)
-                        
-                evicted_idx = queue.add_or_update(idx_int, float(metrics[j]), latent_cpu[j])
-                if evicted_idx is not None:
-                    self.index_to_bucket[evicted_idx] = -1
-                self.index_to_bucket[idx_int] = key
+                s = int(self.bucket_size[k].item())
+                if s < self.max_queue_per_key:
+                    self.bucket_size[k] = s + 1
 
     def log_detailed_distribution(self, logger, global_step):
         if logger is None:
@@ -476,8 +402,8 @@ class MacroLoss(nn.Module):
         all_keys_for_hist = []
         data_for_bar = []
         
-        for k, q in sorted(self.hash_memory.items()):
-            size = len(q)
+        sizes = self.bucket_size.tolist()
+        for k, size in enumerate(sizes):
             if size > 0:
                 all_keys_for_hist.extend([k] * size)
                 data_for_bar.append([str(k), size])
@@ -497,7 +423,7 @@ class MacroLoss(nn.Module):
         self.debug_metrics = {'rebuild_triggered': 0.0}
         
         # --- [추가] 버킷 분포 로깅 지표 ---
-        sizes = [len(q) for q in self.hash_memory.values() if len(q) > 0]
+        sizes = [s for s in self.bucket_size.tolist() if s > 0]
         if sizes:
             mean_val = sum(sizes) / len(sizes)
             self.debug_metrics['bucket_size_mean'] = mean_val
@@ -708,7 +634,7 @@ class MacroLoss(nn.Module):
 
         trigger_obs = obs[trigger_mask] if torch.any(trigger_mask) else None
 
-        if not torch.any(trigger_mask) or not self.hash_memory:
+        if not torch.any(trigger_mask) or self.bucket_size.sum() == 0:
             self.debug_metrics['trigger_count'] = trigger_mask.sum().item() if trigger_mask is not None else 0
             self.debug_metrics['pair_count'] = 0
             self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
@@ -736,230 +662,175 @@ class MacroLoss(nn.Module):
         metric_trigger = metric_trigger_full[trigger_mask]
             
         keys = self._hash_keys(latent_trigger.detach())
-
-        past_index_list = []
-        past_metric_list = []
-        past_old_latent_list = []
-        curr_logits_list = []
-        curr_metric_list = []
-        curr_obs_list = []
-        pair_count = 0
-
-        if self.lazy_rebuild_enable:
-            total_fetched = 0
-            max_fetch = self.lazy_rebuild_multiplier * self.max_pairs_per_batch
-            pool_entries = [] 
-            fetch_per_trigger = max_fetch // len(keys) if len(keys) > 0 else max_fetch
-            
-            for idx, key in enumerate(keys):
-                fetched_for_this = 0
-                buckets_to_check = [key]
-                if self.lazy_rebuild_use_similar:
-                    buckets_to_check.extend([key ^ (1 << bit) for bit in range(self.hash_bits)])
-                    
-                for b_key in buckets_to_check:
-                    queue = self.hash_memory.get(b_key)
-                    if not queue:
-                        continue
-                    
-                    rem = fetch_per_trigger - fetched_for_this
-                    if rem <= 0:
-                        break
-                    
-                    entries = queue.sample_and_remove(rem)
-                    for e in entries:
-                        self.index_to_bucket[int(e[0])] = -1
-                    pool_entries.extend(entries)
-                    fetched_for_this += len(entries)
-                    total_fetched += len(entries)
-                    
-                if total_fetched >= max_fetch:
-                    break
-                    
-            if not pool_entries:
-                self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
-                self.debug_metrics['pair_count'] = 0
-                self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
-                return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
-
-            if replay_buffer is None:
-                raise ValueError("replay_buffer is required to fetch past observations.")
-
-            pool_indices = [e[0] for e in pool_entries]
-            pool_metrics = [e[1] for e in pool_entries]
-            pool_old_lats = [e[2] if len(e) > 2 else None for e in pool_entries]
-
-            if replay_buffer.store_on_gpu:
-                pool_obs_raw = replay_buffer.obs_buffer[pool_indices]
-            else:
-                pool_obs_raw = torch.from_numpy(replay_buffer.obs_buffer[pool_indices])
-                
-            pool_obs = pool_obs_raw.to(device=latent.device, dtype=latent.dtype) / 255.0
-            pool_obs = rearrange(pool_obs, "N H W C -> N 1 C H W")
-            
-            with torch.no_grad():
-                encoded = encode_fn(pool_obs)
-                if len(encoded) == 3:
-                    pool_latent, pool_logits_clean, pool_latent_full = encoded
-                    pool_latent_full = pool_latent_full.squeeze(1)
-                else:
-                    pool_latent, pool_logits_clean = encoded
-                    pool_latent_full = pool_latent
-                pool_latent, pool_logits_clean = pool_latent.squeeze(1), pool_logits_clean.squeeze(1)
-                
-            pool_latent = pool_latent.detach()
-            pool_logits_clean = pool_logits_clean.detach()
-            pool_latent_full = pool_latent_full.detach()
-            
-            pool_new_keys = self._hash_keys(pool_latent)
-            
-            # --- [추가] Global Rebuild Check (Lazy Branch) ---
-            if self.enable_global_rebuild and global_step is not None:
-                if global_step - self.last_rebuild_step >= self.rebuild_cooldown:
-                    valid_old_lats = [lat for lat in pool_old_lats if lat is not None]
-                    if len(valid_old_lats) > 0 and len(valid_old_lats) == len(pool_latent):
-                        past_old_latent_tensor = torch.stack(valid_old_lats, dim=0).to(pool_latent.device)
-                        latent_diff = 1.0 - F.cosine_similarity(pool_latent, past_old_latent_tensor, dim=-1)
-                        avg_latent_diff = latent_diff.mean().item()
-                        self.debug_metrics['avg_latent_diff'] = avg_latent_diff
-                        
-                        if avg_latent_diff > self.rebuild_threshold:
-                            print(f"[MacroLoss] Rebuilding all hash buckets... (step: {global_step}, diff: {avg_latent_diff:.4f})")
-                            
-                            extra_items = list(zip(pool_indices, pool_metrics, pool_old_lats))
-                            self._rebuild_all_hash_buckets(replay_buffer, encode_fn, latent_dtype=latent.dtype, extra_items=extra_items)
-                            self.last_rebuild_step = global_step
-                            
-                            self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
-                            self.debug_metrics['pair_count'] = 0
-                            self.debug_metrics['rebuild_triggered'] = 1.0
-
-                            self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
-                            return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
-            # ------------------------------------------------
-
-            target_past_logits_list = []
-            target_past_latent_full_list = []
-            used_pool_mask = [False] * len(pool_entries)
-            
-            for idx, key in enumerate(keys):
-                paired_for_this = 0
-                for i, p_key in enumerate(pool_new_keys):
-                    if p_key == key and not used_pool_mask[i]:
-                        used_pool_mask[i] = True
-                        
-                        past_index_list.append(pool_indices[i])
-                        past_metric_list.append(pool_metrics[i])
-                        past_old_latent_list.append(pool_latent[i])
-                        target_past_logits_list.append(pool_logits_clean[i])
-                        target_past_latent_full_list.append(pool_latent_full[i])
-                        
-                        curr_logits_list.append(logits_trigger[idx])
-                        curr_metric_list.append(metric_trigger[idx])
-                        curr_obs_list.append(trigger_obs[idx])
-                        
-                        pair_count += 1
-                        paired_for_this += 1
-                        
-                        if paired_for_this >= self.max_past_samples or pair_count >= self.max_pairs_per_batch:
-                            break
-                if pair_count >= self.max_pairs_per_batch:
-                    break
-
-            pool_latent_cpu = pool_latent.cpu()
-            
-            # 동적 크기 조정
-            max_idx = max([int(idx) for idx in pool_indices]) if pool_indices else -1
-            if max_idx >= self.index_to_bucket.size(0):
-                new_size = max(self.index_to_bucket.size(0) * 2, max_idx + 10000)
-                new_buffer = torch.full((new_size,), -1, dtype=torch.int16, device=self.index_to_bucket.device)
-                new_buffer[:self.index_to_bucket.size(0)] = self.index_to_bucket
-                self.register_buffer("index_to_bucket", new_buffer, persistent=False)
-                
-            for i, p_key in enumerate(pool_new_keys):
-                idx_int = int(pool_indices[i])
-                queue = self.hash_memory.get(p_key)
-                if queue is None:
-                    queue = FastHashBucket(max_size=self.max_queue_per_key)
-                    self.hash_memory[p_key] = queue
-                    
-                old_key = self.index_to_bucket[idx_int].item()
-                if old_key != -1 and old_key != p_key:
-                    old_queue = self.hash_memory.get(old_key)
-                    if old_queue is not None:
-                        old_queue.remove(idx_int)
-                        
-                evicted_idx = queue.add_or_update(idx_int, float(pool_metrics[i]), pool_latent_cpu[i])
-                if evicted_idx is not None:
-                    self.index_to_bucket[evicted_idx] = -1
-                self.index_to_bucket[idx_int] = p_key
-                
-            if pair_count == 0:
-                self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
-                self.debug_metrics['pair_count'] = 0
-                self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
-                return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
-
-            past_obs_raw = replay_buffer.obs_buffer[past_index_list] if replay_buffer.store_on_gpu else torch.from_numpy(replay_buffer.obs_buffer[past_index_list])
-            past_obs = past_obs_raw.to(device=latent.device, dtype=latent.dtype) / 255.0
-            past_obs = rearrange(past_obs, "N H W C -> N 1 C H W")
-            
-            curr_logits = torch.stack(curr_logits_list, dim=0)
-            curr_obs_paired = torch.stack(curr_obs_list, dim=0)
-            
-            past_latent = torch.stack(past_old_latent_list, dim=0)
-            past_logits_clean = torch.stack(target_past_logits_list, dim=0)
-            past_latent_full = torch.stack(target_past_latent_full_list, dim=0)
+        keys_int = keys.to(torch.int64)
+        
+        M = len(keys_int)
+        K = self.max_past_samples
+        
+        if M == 0:
+            pair_count = 0
         else:
-            for idx, key in enumerate(keys):
-                queue = self.hash_memory.get(key)
-                if not queue:
-                    continue
-
-                available_slots = self.max_pairs_per_batch - pair_count
-                k = min(self.max_past_samples, available_slots)
-                entries = queue.sample_and_remove(k)
-
-                if not entries:
-                    break
-
-                for entry in entries:
-                    index_item, metric_item = entry[0], entry[1]
-                    old_lat_item = entry[2] if len(entry) > 2 else None
-                    
-                    past_index_list.append(index_item)
-                    past_metric_list.append(metric_item)
-                    if old_lat_item is not None:
-                        past_old_latent_list.append(old_lat_item)
-                        
-                    curr_logits_list.append(logits_trigger[idx])
-                    curr_metric_list.append(metric_trigger[idx])
-                    curr_obs_list.append(trigger_obs[idx])
-                    pair_count += 1
+            if self.lazy_rebuild_enable:
+                # Vectorized LazyRebuild Logic
+                K_fetch = self.max_past_samples * self.lazy_rebuild_multiplier
+                base_keys = keys_int.unsqueeze(1)
                 
-                if pair_count >= self.max_pairs_per_batch:
-                    break
+                if self.lazy_rebuild_use_similar:
+                    shifts = torch.arange(self.hash_bits, device=keys.device)
+                    flip_masks = 1 << shifts
+                    neighbor_keys = base_keys ^ flip_masks.unsqueeze(0)
+                    search_keys = torch.cat([base_keys, neighbor_keys], dim=1)
+                else:
+                    search_keys = base_keys
+                    
+                num_search = search_keys.size(1)
+                K_per_bucket = max(1, K_fetch // num_search)
+                
+                heads = self.bucket_head[search_keys]
+                sizes = self.bucket_size[search_keys]
+                
+                offsets = torch.arange(1, K_per_bucket + 1, device=keys.device).view(1, 1, -1)
+                heads_exp = heads.unsqueeze(-1)
+                sizes_exp = sizes.unsqueeze(-1).expand(-1, -1, K_per_bucket)
+                
+                pos = (heads_exp - offsets) % self.max_queue_per_key
+                search_keys_exp = search_keys.unsqueeze(-1).expand(-1, -1, K_per_bucket)
+                
+                global_indices = self.bucket_queues[search_keys_exp, pos]
+                
+                valid_mask = (offsets <= sizes_exp)
+                valid_mask &= (global_indices != -1)
+                valid_mask &= (self.item_bucket[global_indices] == search_keys_exp.to(torch.int32))
+                
+                pool_global_indices = global_indices[valid_mask]
+                pool_curr_batch_idx = torch.arange(M, device=keys.device).view(M, 1, 1).expand(-1, num_search, K_per_bucket)[valid_mask]
+                
+                if len(pool_global_indices) > 0:
+                    unique_pool_indices, inverse_indices = torch.unique(pool_global_indices, return_inverse=True)
+                    past_index_list = unique_pool_indices.tolist()
+                    
+                    if replay_buffer.store_on_gpu:
+                        past_obs_raw = replay_buffer.obs_buffer[past_index_list]
+                    else:
+                        idx_tensor = torch.tensor(past_index_list, dtype=torch.long)
+                        past_obs_raw = torch.from_numpy(replay_buffer.obs_buffer[idx_tensor])
+                        
+                    past_obs_pool = past_obs_raw.to(device=latent.device, dtype=latent.dtype) / 255.0
+                    past_obs_pool = rearrange(past_obs_pool, "N H W C -> N 1 C H W")
+                    
+                    with torch.no_grad():
+                        encoded = encode_fn(past_obs_pool)
+                        if len(encoded) == 3:
+                            past_latent_pool, past_logits_pool, past_latent_full_pool = encoded
+                            past_latent_full_pool = past_latent_full_pool.squeeze(1)
+                        else:
+                            past_latent_pool, past_logits_pool = encoded
+                            past_latent_full_pool = past_latent_pool
+                        past_latent_pool, past_logits_pool = past_latent_pool.squeeze(1), past_logits_pool.squeeze(1)
+                    
+                    past_latent_pool = past_latent_pool.detach()
+                    past_logits_pool = past_logits_pool.detach()
+                    past_latent_full_pool = past_latent_full_pool.detach()
+                    
+                    # Lazy Update Memory
+                    pool_new_keys = self._hash_keys(past_latent_pool).to(torch.int32)
+                    self.item_latents[unique_pool_indices] = past_latent_pool.to(self.item_latents.dtype)
+                    self.item_bucket[unique_pool_indices] = pool_new_keys
+                    
+                    # Re-match with original trigger keys
+                    new_keys_for_flat_pool = pool_new_keys[inverse_indices]
+                    required_keys = keys_int[pool_curr_batch_idx].to(torch.int32)
+                    match_mask = (new_keys_for_flat_pool == required_keys)
+                    
+                    valid_global_indices_matched = pool_global_indices[match_mask]
+                    valid_curr_batch_idx_matched = pool_curr_batch_idx[match_mask]
+                    inverse_matched = inverse_indices[match_mask]
+                    
+                    # Filter up to constraints
+                    final_global_indices = []
+                    final_curr_batch = []
+                    final_unique_idx = []
+                    counts = torch.zeros(M, dtype=torch.int32, device=keys.device)
+                    
+                    matched_global_cpu = valid_global_indices_matched.cpu().tolist()
+                    matched_curr_cpu = valid_curr_batch_idx_matched.cpu().tolist()
+                    matched_inv_cpu = inverse_matched.cpu().tolist()
+                    
+                    pair_count = 0
+                    for g_idx, c_idx, inv_idx in zip(matched_global_cpu, matched_curr_cpu, matched_inv_cpu):
+                        if counts[c_idx] < self.max_past_samples:
+                            counts[c_idx] += 1
+                            final_global_indices.append(g_idx)
+                            final_curr_batch.append(c_idx)
+                            final_unique_idx.append(inv_idx)
+                            pair_count += 1
+                            
+                            if pair_count >= self.max_pairs_per_batch:
+                                break
+                    
+                    if pair_count > 0:
+                        valid_global_indices = torch.tensor(final_global_indices, dtype=torch.long, device=keys.device)
+                        valid_curr_batch_idx = torch.tensor(final_curr_batch, dtype=torch.long, device=keys.device)
+                        final_unique_idx = torch.tensor(final_unique_idx, dtype=torch.long, device=keys.device)
+                        
+                        past_latent = past_latent_pool[final_unique_idx]
+                        past_logits_clean = past_logits_pool[final_unique_idx]
+                        past_latent_full = past_latent_full_pool[final_unique_idx]
+                        past_obs = past_obs_pool[final_unique_idx]
+                else:
+                    pair_count = 0
+            else:
+                # Direct Fetch (No LazyRebuild)
+                heads = self.bucket_head[keys_int]
+                sizes = self.bucket_size[keys_int]
+                
+                offsets = torch.arange(1, K + 1, device=keys.device).unsqueeze(0)
+                heads_exp = heads.unsqueeze(1)
+                sizes_exp = sizes.unsqueeze(1).expand(-1, K)
+                
+                pos = (heads_exp - offsets) % self.max_queue_per_key
+                keys_exp = keys_int.unsqueeze(1).expand(-1, K)
+                
+                global_indices = self.bucket_queues[keys_exp, pos]
+                
+                valid_mask = (offsets <= sizes_exp)
+                valid_mask &= (global_indices != -1)
+                valid_mask &= (self.item_bucket[global_indices] == keys_exp.to(torch.int32))
+                
+                valid_global_indices = global_indices[valid_mask]
+                curr_batch_idx = torch.arange(M, device=keys.device).unsqueeze(1).expand(-1, K)
+                valid_curr_batch_idx = curr_batch_idx[valid_mask]
+                
+                if len(valid_global_indices) > self.max_pairs_per_batch:
+                    valid_global_indices = valid_global_indices[:self.max_pairs_per_batch]
+                    valid_curr_batch_idx = valid_curr_batch_idx[:self.max_pairs_per_batch]
+                    
+                pair_count = len(valid_global_indices)
 
-            if pair_count == 0:
-                self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
-                self.debug_metrics['pair_count'] = 0
-                self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
-                return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
+        if pair_count == 0:
+            self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
+            self.debug_metrics['pair_count'] = 0
+            self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
+            return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
 
-            if replay_buffer is None:
-                raise ValueError("replay_buffer is required to fetch past observations.")
+        past_index_list = valid_global_indices.tolist()
+        past_metric_list = self.item_metrics[valid_global_indices].tolist()
+        past_old_latent_tensor = self.item_latents[valid_global_indices]
 
+        curr_logits = logits_trigger[valid_curr_batch_idx]
+        curr_obs_paired = trigger_obs[valid_curr_batch_idx]
+        curr_metric_list = list(metric_trigger[valid_curr_batch_idx].unbind(0))
+
+        if not self.lazy_rebuild_enable:
             if replay_buffer.store_on_gpu:
                 past_obs_raw = replay_buffer.obs_buffer[past_index_list]
             else:
-                past_obs_raw = torch.from_numpy(replay_buffer.obs_buffer[past_index_list])
+                idx_tensor = torch.tensor(past_index_list, dtype=torch.long)
+                past_obs_raw = torch.from_numpy(replay_buffer.obs_buffer[idx_tensor])
                 
             past_obs = past_obs_raw.to(device=latent.device, dtype=latent.dtype) / 255.0
             past_obs = rearrange(past_obs, "N H W C -> N 1 C H W")
             
-            curr_logits = torch.stack(curr_logits_list, dim=0)
-            curr_obs_paired = torch.stack(curr_obs_list, dim=0)
-
             with torch.no_grad():
                 encoded = encode_fn(past_obs)
                 if len(encoded) == 3:
@@ -974,49 +845,42 @@ class MacroLoss(nn.Module):
             past_logits_clean = past_logits_clean.detach()
             past_latent_full = past_latent_full.detach()
 
-            # --- [추가] Global Rebuild Check ---
-            if self.enable_global_rebuild and global_step is not None:
-                if global_step - self.last_rebuild_step >= self.rebuild_cooldown:
-                    if len(past_old_latent_list) == pair_count and pair_count > 0:
-                        past_old_latent_tensor = torch.stack(past_old_latent_list, dim=0).to(past_latent.device)
-                        # cosine distance = 1 - cosine_similarity
-                        latent_diff = 1.0 - F.cosine_similarity(past_latent, past_old_latent_tensor, dim=-1)
-                        avg_latent_diff = latent_diff.mean().item()
-                        self.debug_metrics['avg_latent_diff'] = avg_latent_diff
-                        
-                        if avg_latent_diff > self.rebuild_threshold:
-                            print(f"[MacroLoss] Rebuilding all hash buckets... (step: {global_step}, diff: {avg_latent_diff:.4f})")
-                            
-                            # 버킷에서 방금 꺼내온(sample_and_remove) 아이템들이 Rebuild 과정에서 영구 삭제되는 것을 막기 위해 추가
-                            extra_items = list(zip(past_index_list, past_metric_list, past_old_latent_list))
-                            
-                            self._rebuild_all_hash_buckets(replay_buffer, encode_fn, latent_dtype=latent.dtype, extra_items=extra_items)
-                            self.last_rebuild_step = global_step
-                            
-                            self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
-                            self.debug_metrics['pair_count'] = pair_count
-                            self.debug_metrics['rebuild_triggered'] = 1.0
+        # --- Global Rebuild Check ---
+        if self.enable_global_rebuild and global_step is not None:
+            if global_step - self.last_rebuild_step >= self.rebuild_cooldown:
+                latent_diff = 1.0 - F.cosine_similarity(past_latent, past_old_latent_tensor, dim=-1)
+                avg_latent_diff = latent_diff.mean().item()
+                self.debug_metrics['avg_latent_diff'] = avg_latent_diff
+                
+                if avg_latent_diff > self.rebuild_threshold:
+                    print(f"[MacroLoss] Rebuilding all hash buckets... (step: {global_step}, diff: {avg_latent_diff:.4f})")
+                    
+                    extra_items = list(zip(past_index_list, past_metric_list, past_old_latent_tensor.cpu().unbind(0)))
+                    self._rebuild_all_hash_buckets(replay_buffer, encode_fn, latent_dtype=latent.dtype, extra_items=extra_items)
+                    self.last_rebuild_step = global_step
+                    
+                    self.debug_metrics['trigger_count'] = trigger_mask.sum().item()
+                    self.debug_metrics['pair_count'] = pair_count
+                    self.debug_metrics['rebuild_triggered'] = 1.0
 
-                            # 버킷이 재구축되었으므로 현재 샘플링된 past_obs와의 pair 학습은 이번 스텝에서 건너뜁니다.
-                            self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
-                            return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
-        # ----------------------------------
+                    self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
+                    return distill_loss, distill_loss, latent.new_tensor(0.0), trigger_obs, trigger_mask, trigger_mask_original
 
         # --- Multi-Masking Cutout Logic ---
         use_cutout_now = self.use_cutout and self.num_masks > 0
         if use_cutout_now and (self.cutout_disable_after < 0 or global_step <= self.cutout_disable_after):
-            M = self.num_masks
-            N = pair_count
+            M_cut = self.num_masks
+            N_cut = pair_count
             
-            curr_obs_flat = curr_obs_paired # already [N, C, H, W]
-            past_obs_flat = past_obs.squeeze(1) # [N, 1, C, H, W] -> [N, C, H, W]
+            curr_obs_flat = curr_obs_paired
+            past_obs_flat = past_obs.squeeze(1)
             _, C, H, W = curr_obs_flat.shape
             
-            curr_obs_M = curr_obs_flat.unsqueeze(1).expand(-1, M, -1, -1, -1).reshape(N * M, C, H, W)
-            past_obs_M = past_obs_flat.unsqueeze(1).expand(-1, M, -1, -1, -1).reshape(N * M, C, H, W)
+            curr_obs_M = curr_obs_flat.unsqueeze(1).expand(-1, M_cut, -1, -1, -1).reshape(N_cut * M_cut, C, H, W)
+            past_obs_M = past_obs_flat.unsqueeze(1).expand(-1, M_cut, -1, -1, -1).reshape(N_cut * M_cut, C, H, W)
             
             from utils import batch_cutout_mask
-            masks = batch_cutout_mask(N * M, H, W, curr_obs_paired.device, p=self.cutout_p, scale=self.cutout_scale, ratio=self.cutout_ratio)
+            masks = batch_cutout_mask(N_cut * M_cut, H, W, curr_obs_paired.device, p=self.cutout_p, scale=self.cutout_scale, ratio=self.cutout_ratio)
             masks_expanded = masks.expand(-1, C, -1, -1)
             
             cutout_val_tensor = torch.tensor(self.cutout_value, dtype=curr_obs_paired.dtype, device=curr_obs_paired.device)
@@ -1042,35 +906,6 @@ class MacroLoss(nn.Module):
             M = 1
             N = pair_count
         # ----------------------------------
-
-        if not self.lazy_rebuild_enable:
-            new_keys = self._hash_keys(past_latent)
-            past_latent_cpu = past_latent.cpu()
-            
-            max_idx = max([int(idx) for idx in past_index_list]) if past_index_list else -1
-            if max_idx >= self.index_to_bucket.size(0):
-                new_size = max(self.index_to_bucket.size(0) * 2, max_idx + 10000)
-                new_buffer = torch.full((new_size,), -1, dtype=torch.int16, device=self.index_to_bucket.device)
-                new_buffer[:self.index_to_bucket.size(0)] = self.index_to_bucket
-                self.register_buffer("index_to_bucket", new_buffer, persistent=False)
-                
-            for i, new_key in enumerate(new_keys):
-                idx_int = int(past_index_list[i])
-                target_queue = self.hash_memory.get(new_key)
-                if target_queue is None:
-                    target_queue = FastHashBucket(max_size=self.max_queue_per_key)
-                    self.hash_memory[new_key] = target_queue
-                    
-                old_key = self.index_to_bucket[idx_int].item()
-                if old_key != -1 and old_key != new_key:
-                    old_queue = self.hash_memory.get(old_key)
-                    if old_queue is not None:
-                        old_queue.remove(idx_int)
-                        
-                evicted_idx = target_queue.add_or_update(idx_int, float(past_metric_list[i]), past_latent_cpu[i])
-                if evicted_idx is not None:
-                    self.index_to_bucket[evicted_idx] = -1
-                self.index_to_bucket[idx_int] = new_key
 
         curr_metric = torch.stack(curr_metric_list, dim=0)
 
