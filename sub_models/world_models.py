@@ -22,6 +22,10 @@ from torch.distributions.independent import Independent
 import numpy as np
 from tools import weight_init
 import cv2
+try:
+    from sub_models.macro_loss import MacroLoss
+except ImportError:
+    MacroLoss = None
     
 class Encoder(nn.Module):
     def __init__(self, depth=128, mults=(1, 2, 4, 2), norm='rms', act='SiLU', kernel=4, padding='same',
@@ -380,6 +384,24 @@ class WorldModel(nn.Module):
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=config.Models.WorldModel.Warmup_steps)
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp and config.Models.WorldModel.dtype is not torch.bfloat16)
+        
+        macro_cfg = getattr(config.Models.WorldModel, 'MacroLoss', {})
+        macro_enable = getattr(macro_cfg, 'Enable', False)
+        if MacroLoss is not None and macro_enable:
+            self.macro_loss = MacroLoss(
+                latent_dim=self.stoch_flattened_dim,
+                config=macro_cfg,
+                full_latent_dim=self.stoch_flattened_dim
+            ).to(device)
+            # Add macro_loss parameters to the optimizer if needed, or let it have its own? 
+            # In grad_research it was part of world_model.parameters(). 
+            # Since self.macro_loss is a submodule, it will be included if initialized before self.optimizer!
+            # Wait, self.optimizer is initialized on line 374! 
+            # I need to re-initialize the optimizer to include MacroLoss parameters.
+            self.optimizer.add_param_group({'params': self.macro_loss.parameters()})
+        else:
+            self.macro_loss = None
+
     @profile
     def encode_obs(self, obs):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -388,6 +410,16 @@ class WorldModel(nn.Module):
             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
+
+    def encode_for_macro(self, obs):
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+            embedding = self.encoder(obs)
+            post_logits = self.dist_head.forward_post(embedding)
+            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+            flattened_sample = self.flatten_sample(sample)
+            flattened_logits = rearrange(post_logits, "B L K C -> B L (K C)")
+        return flattened_sample, flattened_logits, flattened_sample
+
     @profile
     def calc_last_dist_feat(self, latent, action, inference_params=None):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -634,7 +666,7 @@ class WorldModel(nn.Module):
 
 
     @profile
-    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None):
+    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None, indexes=None, replay_buffer=None, agent=None):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -666,7 +698,46 @@ class WorldModel(nn.Module):
             # dyn-rep loss
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
+            
             total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
+
+            if self.macro_loss is not None:
+                # Calculate TD error or Aux value difference using agent
+                values_sq = None
+                if agent is not None:
+                    with torch.no_grad():
+                        aligned_input = torch.cat([flattened_sample[:, 1:], dist_feat[:, :-1]], dim=-1)
+                        aligned_values = agent.value(aligned_input) 
+                        reward_sq = reward.squeeze(-1) if reward.dim() == 3 else reward
+                        values_sq = torch.zeros_like(reward_sq)
+                        values_sq[:, 1:] = aligned_values.squeeze(-1) if aligned_values.dim() == 3 else aligned_values
+                
+                flattened_logits = rearrange(post_logits, "B L K C -> B L (K C)")
+                macro_loss, m_distill_loss, m_contrastive_loss, trigger_obs, t_mask, t_mask_orig = self.macro_loss(
+                    obs=obs,
+                    latent=flattened_sample,
+                    logits=flattened_logits,
+                    reward=reward,
+                    encode_fn=self.encode_for_macro,
+                    reward_mean=0.0,
+                    reward_std=1.0,
+                    value=values_sq, 
+                    aux_value=None,
+                    termination=termination,
+                    indexes=indexes,
+                    replay_buffer=replay_buffer,
+                    global_step=global_step,
+                    latent_full=flattened_sample,
+                    aux_gamma=0.985,
+                    aux_lam=0.95
+                )
+                total_loss = total_loss + macro_loss
+                if logger is not None:
+                    for k, v in self.macro_loss.debug_metrics.items():
+                        logger.log(f"MacroLoss/{k}", v, global_step=global_step)
+                    logger.log("WorldModel/macro_loss", macro_loss.item(), global_step=global_step)
+                    logger.log("WorldModel/macro_distill_loss", m_distill_loss.item(), global_step=global_step)
+                    logger.log("WorldModel/macro_contrastive_loss", m_contrastive_loss.item(), global_step=global_step)
 
         # gradient descent
         self.scaler.scale(total_loss).backward()
@@ -677,6 +748,9 @@ class WorldModel(nn.Module):
         self.optimizer.zero_grad(set_to_none=True)
         self.lr_scheduler.step()
         self.warmup_scheduler.dampen()
+        
+        if self.macro_loss is not None:
+            self.macro_loss.update_slow_target(decay=0.98)
 
         if (global_step + epoch_step) % self.save_every_steps == 0: # and global_step != 0:
             sample_obs = torch.clamp(obs[:3, 0, :]*255, 0, 255).permute(0, 2, 3, 1).cpu().detach().float().numpy().astype(np.uint8)

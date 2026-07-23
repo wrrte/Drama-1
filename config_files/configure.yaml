@@ -56,6 +56,42 @@ Models:
     Dropout: 0.1
     Unimix_ratio: 0.01
     Weight_decay: 1.0e-4
+    MacroLoss:
+      Enable: true
+      DistanceMetric: margin                 
+      DBCAlpha: 0.3                       
+      Margin: 0.92                         
+      UIDimRatio: 8                       
+      UIKLWeight: 1.0                     
+      TriggerType: aux_value_diff         
+      IncludePrevFrameInMacroLoss: false   
+      DiffType: aux_value         
+      ContrastiveSigmaRatio: 0.1          
+      SigmaThreshold: 2.0
+      EnableMaxRelativeThreshold: true
+      MaxRelativeThresholdRatio: 0.03
+      MaxRelativeThresholdDecay: 0.999
+      HashBits: 10
+      MaxQueuePerKey: 100000
+      MaxPastSamples: 32
+      MaxPairsPerBatch: 256
+      LossScale: 10
+      LazyRebuild:
+        Enable: true
+        SampleMultiplier: 8
+        UseSimilarBuckets: true 
+      EnableGlobalRebuild: true
+      RebuildThreshold: 0.45
+      RebuildCooldown: 3000
+      RebuildBatchSize: 32768  
+      DisableAfterStep: 0  
+      StoreOnlyTriggered: false 
+      Cutout:
+        Enable: false
+      LatentDropout:
+        Enable: true
+        Probability: 0.2
+        Target: critic
     Adam:
       LearningRate: 1.0e-4
     Laprop:

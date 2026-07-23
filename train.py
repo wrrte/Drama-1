@@ -28,7 +28,7 @@ import ast
 
 
 @profile
-def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, batch_length, logger, epoch, global_step):
+def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, agent: agents.ActorCriticAgent, batch_size, batch_length, logger, epoch, global_step):
     epoch_reconstruction_loss_list = []
     epoch_reward_loss_list = []
     epoch_termination_loss_list = []
@@ -38,10 +38,14 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
     epoch_representation_real_kl_div_list = []
     epoch_total_loss_list = []
     for e in range(epoch):
-        obs, action, reward, termination = replay_buffer.sample(batch_size, batch_length, imagine=False)
+        obs, action, reward, termination, indexes = replay_buffer.sample(batch_size, batch_length, imagine=False)
         reconstruction_loss, reward_loss, termination_loss, \
         dynamics_loss, dynamics_real_kl_div, representation_loss, \
-        representation_real_kl_div, total_loss = world_model.update(obs, action, reward, termination, global_step=global_step, epoch_step=e, logger=logger)
+        representation_real_kl_div, total_loss = world_model.update(
+            obs, action, reward, termination, 
+            global_step=global_step, epoch_step=e, logger=logger,
+            indexes=indexes, replay_buffer=replay_buffer, agent=agent
+        )
 
         epoch_reconstruction_loss_list.append(reconstruction_loss)
         epoch_reward_loss_list.append(reward_loss)
@@ -74,7 +78,7 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
     '''
     world_model.eval()
     agent.eval()
-    sample_obs, sample_action, sample_reward, sample_termination = replay_buffer.sample(
+    sample_obs, sample_action, sample_reward, sample_termination, _ = replay_buffer.sample(
         imagine_batch_size, imagine_context_length, imagine=True)
     if world_model.model == 'Transformer':
         latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data(
@@ -202,13 +206,14 @@ def joint_train_world_model_agent(config, logdir,
 
         if replay_buffer.ready('world_model') and total_steps % (config.JointTrainAgent.TrainDynamicsEverySteps // config.JointTrainAgent.NumEnvs) == 0 and total_steps <= config.JointTrainAgent.FreezeWorldModelAfterSteps:
             train_world_model_step(
-                replay_buffer=replay_buffer,
-                world_model=world_model,
-                batch_size=config.JointTrainAgent.BatchSize,
-                batch_length=config.JointTrainAgent.BatchLength,
-                logger=logger,
-                epoch=config.JointTrainAgent.TrainDynamicsEpoch,
-                global_step=total_steps
+                replay_buffer,
+                world_model,
+                agent,
+                config.JointTrainAgent.BatchSize,
+                config.JointTrainAgent.BatchLength,
+                logger,
+                config.JointTrainAgent.TrainDynamicsEpoch,
+                total_steps
             )
 
 
