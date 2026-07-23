@@ -357,11 +357,12 @@ class MacroLoss(nn.Module):
         
         for i in range(0, len(all_indices), self.rebuild_batch_size):
             indices = all_indices[i:i+self.rebuild_batch_size]
+            indices_tensor_batch = indices_tensor[i:i+self.rebuild_batch_size]
             
             if replay_buffer.store_on_gpu:
-                obs_raw = replay_buffer.obs_buffer[indices]
+                obs_raw = replay_buffer.obs_buffer[indices_tensor_batch]
             else:
-                idx_tensor = torch.tensor(indices, dtype=torch.long)
+                idx_tensor = indices_tensor_batch.cpu().long()
                 obs_raw = torch.from_numpy(replay_buffer.obs_buffer[idx_tensor])
                 
             obs = obs_raw.to(device=self.hash_proj.device, dtype=latent_dtype) / 255.0
@@ -707,12 +708,13 @@ class MacroLoss(nn.Module):
                 
                 if len(pool_global_indices) > 0:
                     unique_pool_indices, inverse_indices = torch.unique(pool_global_indices, return_inverse=True)
+                    self.debug_metrics['lazy_pool_size'] = len(unique_pool_indices)
                     past_index_list = unique_pool_indices.tolist()
                     
                     if replay_buffer.store_on_gpu:
-                        past_obs_raw = replay_buffer.obs_buffer[past_index_list]
+                        past_obs_raw = replay_buffer.obs_buffer[unique_pool_indices]
                     else:
-                        idx_tensor = torch.tensor(past_index_list, dtype=torch.long)
+                        idx_tensor = unique_pool_indices.cpu().long()
                         past_obs_raw = torch.from_numpy(replay_buffer.obs_buffer[idx_tensor])
                         
                     past_obs_pool = past_obs_raw.to(device=latent.device, dtype=latent.dtype) / 255.0
@@ -746,37 +748,34 @@ class MacroLoss(nn.Module):
                     valid_curr_batch_idx_matched = pool_curr_batch_idx[match_mask]
                     inverse_matched = inverse_indices[match_mask]
                     
-                    # Filter up to constraints
-                    final_global_indices = []
-                    final_curr_batch = []
-                    final_unique_idx = []
-                    counts = torch.zeros(M, dtype=torch.int32, device=keys.device)
-                    
-                    matched_global_cpu = valid_global_indices_matched.cpu().tolist()
-                    matched_curr_cpu = valid_curr_batch_idx_matched.cpu().tolist()
-                    matched_inv_cpu = inverse_matched.cpu().tolist()
-                    
-                    pair_count = 0
-                    for g_idx, c_idx, inv_idx in zip(matched_global_cpu, matched_curr_cpu, matched_inv_cpu):
-                        if counts[c_idx] < self.max_past_samples:
-                            counts[c_idx] += 1
-                            final_global_indices.append(g_idx)
-                            final_curr_batch.append(c_idx)
-                            final_unique_idx.append(inv_idx)
-                            pair_count += 1
-                            
-                            if pair_count >= self.max_pairs_per_batch:
-                                break
-                    
-                    if pair_count > 0:
-                        valid_global_indices = torch.tensor(final_global_indices, dtype=torch.long, device=keys.device)
-                        valid_curr_batch_idx = torch.tensor(final_curr_batch, dtype=torch.long, device=keys.device)
-                        final_unique_idx = torch.tensor(final_unique_idx, dtype=torch.long, device=keys.device)
+                    # 100% GPU Vectorized Group-by & Limit (No CPU Sync!)
+                    N_matches = valid_curr_batch_idx_matched.size(0)
+                    if N_matches > 0:
+                        # [M, N_matches] boolean matrix indicating which match belongs to which trigger
+                        match_matrix = (valid_curr_batch_idx_matched.unsqueeze(0) == torch.arange(M, device=keys.device).unsqueeze(1))
                         
-                        past_latent = past_latent_pool[final_unique_idx]
-                        past_logits_clean = past_logits_pool[final_unique_idx]
-                        past_latent_full = past_latent_full_pool[final_unique_idx]
-                        past_obs = past_obs_pool[final_unique_idx]
+                        # Cumulative sum to count occurrences per trigger
+                        match_counts = match_matrix.cumsum(dim=1)
+                        
+                        # Keep only the first max_past_samples for each trigger
+                        keep_matrix = match_matrix & (match_counts <= self.max_past_samples)
+                        
+                        # Collapse back to 1D mask for the matches
+                        keep_mask_1d = keep_matrix.any(dim=0)
+                        
+                        valid_global_indices = valid_global_indices_matched[keep_mask_1d]
+                        valid_curr_batch_idx = valid_curr_batch_idx_matched[keep_mask_1d]
+                        final_unique_idx = inverse_matched[keep_mask_1d]
+                        
+                        pair_count = len(valid_global_indices)
+                        
+                        if pair_count > 0:
+                            past_latent = past_latent_pool[final_unique_idx]
+                            past_logits_clean = past_logits_pool[final_unique_idx]
+                            past_latent_full = past_latent_full_pool[final_unique_idx]
+                            past_obs = past_obs_pool[final_unique_idx]
+                    else:
+                        pair_count = 0
                 else:
                     pair_count = 0
             else:
@@ -801,10 +800,6 @@ class MacroLoss(nn.Module):
                 curr_batch_idx = torch.arange(M, device=keys.device).unsqueeze(1).expand(-1, K)
                 valid_curr_batch_idx = curr_batch_idx[valid_mask]
                 
-                if len(valid_global_indices) > self.max_pairs_per_batch:
-                    valid_global_indices = valid_global_indices[:self.max_pairs_per_batch]
-                    valid_curr_batch_idx = valid_curr_batch_idx[:self.max_pairs_per_batch]
-                    
                 pair_count = len(valid_global_indices)
 
         if pair_count == 0:
@@ -823,9 +818,9 @@ class MacroLoss(nn.Module):
 
         if not self.lazy_rebuild_enable:
             if replay_buffer.store_on_gpu:
-                past_obs_raw = replay_buffer.obs_buffer[past_index_list]
+                past_obs_raw = replay_buffer.obs_buffer[valid_global_indices]
             else:
-                idx_tensor = torch.tensor(past_index_list, dtype=torch.long)
+                idx_tensor = valid_global_indices.cpu().long()
                 past_obs_raw = torch.from_numpy(replay_buffer.obs_buffer[idx_tensor])
                 
             past_obs = past_obs_raw.to(device=latent.device, dtype=latent.dtype) / 255.0

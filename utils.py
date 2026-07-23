@@ -47,12 +47,17 @@ class WandbLogger:
             path (str): Path to the directory where logs will be saved. This can be used to define the run name in W&B.
             project (str, optional): Name of the W&B project. Defaults to None.
         """
-        # Initialize a W&B run with the given project and path as the run name
+        import wandb.util
+        run_id = wandb.util.generate_id()
+        
         pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
-        run_name = f"{config.Models.WorldModel.Backbone}_{config.Models.Agent.Policy}_{pure_env_name}_seed{config.BasicSettings.Seed}"
-        # Initialize wandb with the complete name (including run ID will be auto-appended by wandb)
-        self.run = wandb.init(project=project, config=config, mode=mode, name=run_name)
-        # self.run.name = f"{self.run.name}_{self.run.id}"
+        try:
+            loss_scale = config.Models.WorldModel.MacroLoss.LossScale
+        except Exception:
+            loss_scale = "N/A"
+            
+        run_name = f"{pure_env_name}_{run_id}_{loss_scale}"
+        self.run = wandb.init(project=project, config=config, mode=mode, id=run_id, name=run_name)
         self.tag_step = {}
 
     def log(self, tag, value, global_step):
@@ -74,6 +79,11 @@ class WandbLogger:
         elif "hist" in tag:
             # Log histogram
             wandb.log({tag: wandb.Histogram(value)}, step=global_step)
+        elif "bar" in tag:
+            # Log bar chart
+            data, columns, x, y, title = value
+            table = wandb.Table(data=data, columns=columns)
+            wandb.log({tag: wandb.plot.bar(table, x, y, title=title)}, step=global_step)
         else:
             # Log scalar value
             wandb.log({tag: value}, step=global_step)

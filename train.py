@@ -10,8 +10,10 @@ import torch
 from collections import deque
 from tqdm import tqdm
 import colorama
+import time
 
 import pandas as pd
+import wandb
 
 from utils import seed_np_torch, WandbLogger
 from replay_buffer import ReplayBuffer
@@ -37,11 +39,21 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
     epoch_representation_loss_list = []
     epoch_representation_real_kl_div_list = []
     epoch_total_loss_list = []
+    epoch_contrastive_loss_list = []
+    epoch_contrastive_acc_list = []
+    epoch_macro_loss_list = []
+    epoch_macro_distill_loss_list = []
+    epoch_macro_contrastive_loss_list = []
+    
     for e in range(epoch):
         obs, action, reward, termination, indexes = replay_buffer.sample(batch_size, batch_length, imagine=False)
-        reconstruction_loss, reward_loss, termination_loss, \
-        dynamics_loss, dynamics_real_kl_div, representation_loss, \
-        representation_real_kl_div, total_loss = world_model.update(
+        (
+            reconstruction_loss, reward_loss, termination_loss,
+            dynamics_loss, dynamics_real_kl_div, representation_loss,
+            representation_real_kl_div, total_loss,
+            contrastive_loss, contrastive_acc, macro_loss,
+            macro_distill_loss, macro_contrastive_loss
+        ) = world_model.update(
             obs, action, reward, termination, 
             global_step=global_step, epoch_step=e, logger=logger,
             indexes=indexes, replay_buffer=replay_buffer, agent=agent
@@ -55,16 +67,29 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
         epoch_representation_loss_list.append(representation_loss)
         epoch_representation_real_kl_div_list.append(representation_real_kl_div)
         epoch_total_loss_list.append(total_loss)
+        epoch_contrastive_loss_list.append(contrastive_loss)
+        epoch_contrastive_acc_list.append(contrastive_acc)
+        epoch_macro_loss_list.append(macro_loss)
+        epoch_macro_distill_loss_list.append(macro_distill_loss)
+        epoch_macro_contrastive_loss_list.append(macro_contrastive_loss)
+        
     if logger is not None:
         logger.log("WorldModel/reconstruction_loss", np.mean(epoch_reconstruction_loss_list), global_step=global_step)
-        # logger.log("WorldModel/augmented_reconstruction_loss", augmented_reconstruction_loss.item(), global_step=global_step)
         logger.log("WorldModel/reward_loss",np.mean(epoch_reward_loss_list), global_step=global_step)
         logger.log("WorldModel/termination_loss", np.mean(epoch_termination_loss_list), global_step=global_step)
         logger.log("WorldModel/dynamics_loss", np.mean(epoch_dynamics_loss_list), global_step=global_step)
         logger.log("WorldModel/dynamics_real_kl_div", np.mean(epoch_dynamics_real_kl_div_list), global_step=global_step)
         logger.log("WorldModel/representation_loss", np.mean(epoch_representation_loss_list), global_step=global_step)
         logger.log("WorldModel/representation_real_kl_div", np.mean(epoch_representation_real_kl_div_list), global_step=global_step)
-        logger.log("WorldModel/total_loss", np.mean(epoch_total_loss_list), global_step=global_step)    
+        logger.log("WorldModel/total_loss", np.mean(epoch_total_loss_list), global_step=global_step)
+        logger.log("WorldModel/contrastive_loss", np.mean(epoch_contrastive_loss_list), global_step=global_step)
+        logger.log("WorldModel/contrastive_acc", np.mean(epoch_contrastive_acc_list), global_step=global_step)
+        logger.log("WorldModel/macro_loss", np.mean(epoch_macro_loss_list), global_step=global_step)
+        logger.log("WorldModel/macro_distill_loss", np.mean(epoch_macro_distill_loss_list), global_step=global_step)
+        logger.log("WorldModel/macro_contrastive_loss", np.mean(epoch_macro_contrastive_loss_list), global_step=global_step)
+        
+        if hasattr(world_model, 'macro_loss') and world_model.macro_loss is not None:
+            logger.log("WorldModel/GlobalRebuild_Count", world_model.macro_loss.global_rebuild_count, global_step=global_step)
 
 @profile
 @torch.no_grad()
@@ -180,6 +205,7 @@ def joint_train_world_model_agent(config, logdir,
         else:
             action = env.action_space.sample()
 
+        env_start_time = time.time()
         ob, reward, is_last, info = env.step(action)
         replay_buffer.append(current_ob, action, reward, info['is_terminal'])
 
@@ -202,9 +228,12 @@ def joint_train_world_model_agent(config, logdir,
             context_obs.clear()
             context_action.clear()
 
-
+        env_time = time.time() - env_start_time
+        world_model_time = 0.0
+        agent_time = 0.0
 
         if replay_buffer.ready('world_model') and total_steps % (config.JointTrainAgent.TrainDynamicsEverySteps // config.JointTrainAgent.NumEnvs) == 0 and total_steps <= config.JointTrainAgent.FreezeWorldModelAfterSteps:
+            wm_start_time = time.time()
             train_world_model_step(
                 replay_buffer,
                 world_model,
@@ -215,9 +244,11 @@ def joint_train_world_model_agent(config, logdir,
                 config.JointTrainAgent.TrainDynamicsEpoch,
                 total_steps
             )
+            world_model_time = time.time() - wm_start_time
 
 
         if replay_buffer.ready('behaviour') and total_steps % (config.JointTrainAgent.TrainAgentEverySteps // config.JointTrainAgent.NumEnvs) == 0 and total_steps <= config.JointTrainAgent.FreezeBehaviourAfterSteps:
+            agent_start_time = time.time()
             log_video = total_steps % (config.JointTrainAgent.SaveEverySteps // config.JointTrainAgent.NumEnvs) == 0
 
             imagine_latent, agent_action, old_logits, context_latent, context_reward, context_termination, imagine_reward, imagine_termination = world_model_imagine_data(
@@ -244,9 +275,18 @@ def joint_train_world_model_agent(config, logdir,
                 logger=logger,
                 global_step=total_steps
             )
+            agent_time = time.time() - agent_start_time
+
+        if total_steps % 100 == 0:
+            logger.log("time/env_step_time", env_time, global_step=total_steps)
+            logger.log("time/world_model_time", world_model_time, global_step=total_steps)
+            logger.log("time/agent_time", agent_time, global_step=total_steps)
 
         if config.Evaluate.DuringTraining and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
             _ = eval_episodes(config, world_model, agent, logger, total_steps)
+            
+            if hasattr(world_model, 'macro_loss') and hasattr(world_model.macro_loss, 'log_detailed_distribution'):
+                world_model.macro_loss.log_detailed_distribution(logger, total_steps)
         if config.JointTrainAgent.SaveModels and total_steps % (config.JointTrainAgent.SaveEverySteps // config.JointTrainAgent.NumEnvs) == 0:
             print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
             torch.save(world_model.state_dict(), f"{logdir}/ckpt/world_model.pth")
@@ -419,6 +459,9 @@ if __name__ == "__main__":
         world_model.load_state_dict(torch.load(f"{config.BasicSettings.SavePath}/world_model.pth"))
         agent.load_state_dict(torch.load(f"{config.BasicSettings.SavePath}/agent.pth"))
    
+    with open('/media/storage_data/ai2lab/choemj/Drama/.wandb_api_key', 'r') as f:
+        wandb_key = f.read().strip()
+    wandb.login(key=wandb_key)
     logger = WandbLogger(config=config, project=config.Wandb.Init.Project, mode=config.Wandb.Init.Mode)
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{logger.run.id}"
 

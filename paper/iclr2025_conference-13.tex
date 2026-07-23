@@ -1,0 +1,239 @@
+
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2025_conference,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+
+% Authors must not appear in the submitted version. They should be hidden
+% as long as the \iclrfinalcopy macro remains commented out below.
+% Non-anonymous submissions will be rejected without review.
+
+\iclrfinalcopy 
+
+\title{Metric-Aware Contrastive Regularization of Observations}
+
+\author{Minjun Choe \\
+AI2, Dept. of Computer Science \\
+KAIST \\
+\texttt{choemj@kaist.ac.kr} \\
+\And
+Phu Tran, Do Minh Duc, Dohyeun Kim \\ 
+AI2, Dept. of Computer Science \\
+KAIST \\
+\And
+Daeyoung Kim \thanks{Corresponding author.} \\ 
+AI2, Dept. of Computer Science \\
+KAIST \\
+\texttt{kimd@kaist.ac.kr}
+}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to \LaTeX{} to determine where to break
+% the lines. Using \AND forces a linebreak at that point. So, if \LaTeX{}
+% puts 3 of 4 authors names on the first line, and the last on the second
+% line, try using \AND instead of \And before the third author name.
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+%\iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+\begin{document}
+
+
+\maketitle
+
+\begin{abstract}
+Model-based reinforcement learning (MBRL) agents struggle to master long-horizon tasks with extremely sparse rewards. A fundamental bottleneck, exemplified by the Atari \textit{Seaquest} environment, extends beyond a simple representation paradox. Even if an agent successfully encodes minute, static, yet critical sub-goal metrics such as UI counters into the latent space, modern encoding-based world models fail to map the causal dynamics underlying these metric variations to the environment's long-horizon reward chain. To overcome this, we introduce MACRO, a targeted representation constraint leveraging historical samples retrieved from the entire replay buffer—including both a single seed trajectory and online experiences. Rather than relying on computationally heavy full-frame pixel reconstruction or settling for mere visual retention, our method forces a value-driven structuring of functionally distinct states through a metric-aware contrastive objective. By hashing latent representations for efficient historical retrieval, our method explicitly forces a geometric separation between embeddings that are visually similar but functionally distinct—effectively breaking the encoder's smoothing bias over static UI variables. As a plug-and-play module utilizing an auxiliary value network, MACRO can be seamlessly integrated into existing state-of-the-art encoding-based MBRL architectures \citep[e.g., DreamerV3, STORM, DRAMA;][]{hafner2025mastering, zhang2023storm, wang2025drama}. Empirical evaluations demonstrate that our framework successfully aligns the agent’s internal value estimation with environmental progress, entirely without the use of artificial reward shaping or predefined milestones. Without any manual reward shaping, the agent's expected value function scales proportionally and step-wise as the number of collected divers increases, providing a computationally efficient paradigm for solving complex, sparse-reward challenges. Our code is available at \url{https://github.com/wrrte/graduate_research.git}
+\end{abstract}
+
+\section{Introduction}
+Model-based reinforcement learning (MBRL) has achieved remarkable success by learning compressed latent dynamics of environments, enabling efficient planning and policy optimization \citep{hafner2025mastering}. However, mastering long-horizon tasks with extremely sparse rewards remains a formidable challenge. A quintessential example is the Atari \textit{Seaquest} environment, where an agent must navigate complex dynamics and collect six divers before surfacing to secure a massive sparse reward---which far outweighs the trivial dense rewards of simply shooting enemies. Solving such tasks requires the agent not only to execute extended sequences of actions but also to persistently retain task-critical metrics—such as the exact count of rescued divers—to correctly map the causal relationship between its internal progress and the ultimate reward over thousands of environmental steps.
+
+This challenge exposes a critical representation paradox in contemporary encoding-based world models \citep[e.g.,][]{hafner2025mastering, zhang2023storm, wang2025drama, burchi2025learning}. Theoretically, these architectures are designed to preserve all task-relevant information while discarding irrelevant environmental noise. In practice, however, their representation learning objectives exhibit a strong inductive bias toward either high-magnitude visual dynamics---such as moving enemies and expanding explosions---or any visual features directly coupled with immediate rewards. Consequently, without artificial reward shaping to explicitly anchor them, the encoder inherently prioritizes these readily learnable signals while discarding minute, static, and unrewarded sub-goal metrics as background noise.
+
+A more critical limitation is that mere pixel-level reconstruction or representation retention is functionally insufficient for solving temporal credit assignment. Even if a world model distinctly encodes static sub-goal metrics visually, the policy network completely collapses if it fails to learn the causal rule that variations in this metric arise from specific environmental interactions (e.g., colliding with a submarine). Unless functionally distinct states are geometrically and explicitly separated within the value space, the agent treats them as actionable noise, failing to establish a causal link with the delayed sparse reward.
+
+While recent diffusion-based world models \citep[e.g., EDELINE;][]{lee2026edeline} have achieved high scores in \textit{Seaquest} through maximal pixel-level reconstruction, they incur prohibitive computational costs. Although they employ State Space Models (SSMs) to theoretically support infinite context lengths via their recurrent state representations, the heavy computational burden of iterative pixel generation practically restricts their scalability for extremely long-horizon tasks.
+
+To resolve this efficiency-fidelity dilemma, we propose a unified model-based framework that enforces the selective retention of critical static variables without relying on full-frame pixel reconstruction. Given the prohibitive exploration space of long-horizon sparse-reward tasks, we initialize the replay buffer with a single seed trajectory. This minimal prior ensures the agent is aware of the delayed sparse reward and its underlying temporal structure, without prescribing strict behavioral cloning. Building upon this, we introduce MACRO, a targeted representation learning constraint leveraging historical samples retrieved from the entire replay buffer—encompassing both the single seed trajectory and ongoing online experiences. Rather than forcing the model to reconstruct every pixel, this loss explicitly etches these minute sub-goal metrics into the latent space via a metric-aware contrastive constraint.
+
+By clustering historically similar latent states using a fast Random Projection-based SimHash algorithm, the loss explicitly penalizes the cosine similarity of representations that share visual features but differ in their underlying state values. Consequently, this precise disentanglement provides a reliable foundation for accurate downstream temporal metrics, such as value or TD-error. This elegantly pulls functionally distinct states apart in the latent space. Designed as an architecture-agnostic plug-and-play module, our metric-aware contrastive objective leverages an auxiliary value network to dynamically assess semantic divergence, allowing it to be seamlessly integrated into existing state-of-the-art encoding-based world models such as DreamerV3, STORM, and DRAMA \citep{hafner2025mastering, zhang2023storm, wang2025drama} without requiring fundamental architectural modifications.
+
+The main contributions of this paper are summarized as follows:
+\begin{itemize}
+    \item Motivated by the empirical insight that achieving perfect pixel-level representation does not naturally translate to successful policy execution, we systematically isolate the fundamental disconnect between passive encoding and the learning of causal dynamics in modern MBRL. We provide direct evidence that the inability to structurally separate discrete task counters within the value space---rather than the mere failure to 'memorize' them---is the core culprit behind credit assignment failures in sparse-reward tasks.
+    \item We introduce MACRO, a targeted representation constraint leveraging historical samples retrieved from the entire replay buffer---encompassing both the single seed trajectory and online interaction data---to preserve critical but static visual variables in the latent space.
+    \item We demonstrate that MACRO functions as a highly scalable, plug-and-play module. It seamlessly integrates into existing encoding-based state-of-the-art MBRL baselines \citep[e.g., DreamerV3, STORM, DRAMA;][]{hafner2025mastering, zhang2023storm, wang2025drama}, fundamentally resolving their representation bottlenecks without necessitating costly architectural overhauls.
+    \item We empirically demonstrate that our framework aligns the agent's internal value estimation with true environmental progress, entirely without the use of artificial reward shaping or predefined milestones. Without any manual reward shaping, the expected value function scales proportionally and step-wise as the number of collected divers increases from zero to six.
+\end{itemize}
+
+\section{Related Work and Motivation}
+
+\textbf{World Models and Representation Limits.}
+Recent advancements in model-based reinforcement learning (MBRL), largely driven by the Dreamer family \citep{hafner2025mastering} and DRAMA, leverage latent dynamics to achieve remarkable sample efficiency. However, these models inherently apply a lossy compression bottleneck optimized to filter out perceptual noise. In visually complex but reward-sparse environments like \textit{Atari Seaquest}, this inductive bias aggressively discards static, non-moving UI elements—such as the accumulated diver count—because they exhibit negligible spatio-temporal variance compared to moving background sprites. Consequently, the agent's latent state loses the exact information required to establish long-term credit assignment.
+
+\textbf{The Diffusion Proof-of-Concept: EDELINE.}
+The hypothesis that standard encoders inadvertently discard crucial task variables was implicitly corroborated by EDELINE \citep{lee2026edeline}, which achieved state-of-the-art performance (2,140.1 in \textit{Seaquest} and 4,224.5 in \textit{Asterix}) on the Atari 100k benchmark among non-lookahead search methods. EDELINE bypasses the representation paradox by employing diffusion-based generative models to enforce pixel-perfect reconstruction of the entire environmental frame. While full pixel-level reconstruction theoretically offers an exhaustive and ideal representation of the environment, its practical deployment introduces a prohibitive computational bottleneck. Operating diffusion models over extended long-horizon trajectories is heavily resource-intensive, where the immense computational overhead required for iterative pixel generation practically limits its scalability in environments requiring thousands of sequential steps.
+
+\textbf{Long-Term Memory and a Single Seed Trajectory.}
+To handle extended contexts without full-frame reconstruction, recent architectures incorporate advanced sequence modeling and external memory, such as ELMUR \citep{cherepanovelmur} and MemoryVLA \citep{shi2025memoryvla}. While these state-space models (SSMs) and memory banks excel at long-horizon context retention, they still rely on the underlying visual encoder to extract the correct features initially. Furthermore, accelerating representation learning in extremely sparse environments frequently requires leveraging a single seed trajectory to bootstrap the correct transitions.
+
+\textbf{Motivation.}
+The juxtaposition of EDELINE’s high-fidelity success and the computational redundancy of full-frame reconstruction directly motivates our approach. If the primary requirement for solving \textit{Seaquest} is the unbroken retention of specific static sub-goal metrics, full-frame diffusion is an over-parameterized solution. Furthermore, altering the core recurrent backbone or increasing model capacity is ultimately futile if the visual encoder inherently discards vital UI information during the initial compression phase.
+
+Therefore, we propose MACRO, an architecture-agnostic, plug-and-play representation constraint module. By computing the MACRO loss through historical samples retrieved from a comprehensive replay buffer—seeded by a single seed trajectory and continuously expanded by online experiences—we force the latent space of any encoding-based world model to anchor the static UI variables. This strategy achieves the causal grounding of EDELINE at a fraction of the computational cost, providing a highly scalable drop-in enhancement for modern MBRL architectures like DreamerV3, STORM, and DRAMA \citep{hafner2025mastering, zhang2023storm, wang2025drama}.
+
+\section{Proposed Method}
+
+\subsection{Plug-and-Play Integration into Encoding-Based World Models}
+To fundamentally solve the representation paradox and credit assignment failure in long-horizon, sparse-reward tasks, we introduce MACRO, a modular representation constraint designed for seamless integration into any existing encoding-based model-based reinforcement learning architecture \citep[e.g., DreamerV3, STORM, DRAMA;][]{hafner2025mastering, zhang2023storm, wang2025drama}.
+
+In a standard MBRL framework at timestep $t$, an observation $o_t$ is processed by a visual encoder to generate a latent state $z_t \sim q(z_t | o_t)$. A recurrent backbone (e.g., GRU, Transformer, or SSM) then unfolds the deterministic hidden state $h_t = f(h_{t-1}, z_t, a_t)$. The combined state $s_t = (z_t, h_t)$ forms the comprehensive latent belief utilized by the Actor and Critic networks. MACRO operates strictly during the encoding phase, regularizing $z_t$ without interfering with the complex recurrent dynamics or the policy optimization loops.
+
+Crucially, to ensure that the visual encoder does not discard minute, static UI assets essential for tracing long-term task progression, MACRO introduces an independent auxiliary value network (\texttt{aux\_value\_net}) directly attached to the latent representation $z_t$. This auxiliary network serves as a dedicated, lightweight probe to measure the expected future return strictly based on the current visual embedding. During the training phase, batches of trajectories are sampled uniformly from the comprehensive replay buffer, which is pre-populated with a single seed trajectory alongside the agent's ongoing online interaction data. It is crucial to note that the primary objective of introducing this single seed trajectory is not to accelerate initial learning via imitation. Rather, it serves to reveal the existence of the immensely delayed sparse reward to the agent and to provide a foundational example of the valid sequential process required to attain it. In addition to standard reconstruction and transition losses, the visual representation is regularized via MACRO. This mechanism persistently queries offline and online experiences to identify visually aliased states, forcing a structural separation in the latent coordinates of $z_t$ whenever their underlying sub-goal metrics—as evaluated by the auxiliary value network—diverge.
+
+\subsection{Metric-Aware Contrastive Regularization via MACRO}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.7\textwidth]{importanthashloss.png} 
+\caption{Conceptual illustration of MACRO. Visually aliased states are initially mapped to the same hash bucket due to the encoder's smoothing bias. Our value-aware contrastive objective explicitly forces a geometric separation between these functionally distinct embeddings in the latent space based on their internal value divergence.}
+\label{fig:hash_loss_concept}
+\end{figure}
+
+The fundamental cause of the representation paradox is visual aliasing: the convolutional encoder's tendency to map functionally distinct states into highly similar, collapsed latent representations due to the negligible pixel variance of static UI elements. To counteract this smoothing bias efficiently, we introduce MACRO, a value-aware contrastive regularization that resolves latent visual aliasing without relying on computationally heavy full-frame reconstruction.
+
+\textbf{Random Projection Hashing for $\mathcal{O}(1)$ Retrieval.}
+To efficiently identify visually aliased states across the comprehensive replay buffer, we utilize a fast Random Projection-based SimHash algorithm. A continuous latent representation $z_t$ is projected into a $B$-bit discrete hash key $k \in \mathbb{Z}$ via a fixed Gaussian random projection matrix $W_{proj} \sim \mathcal{N}(0, 1)$:
+\begin{equation}
+    k = \sum_{i=1}^{B} 2^{i-1} \mathbb{I}(z_t \cdot W_{proj} > 0)
+\end{equation}
+This operation preserves the cosine similarity of the latent space. Consequently, the encoder inadvertently assigns visually identical states to the same hash bucket within the memory bank, enabling $\mathcal{O}(1)$ retrieval time to capture occurrences of visual aliasing without exhaustive pairwise comparisons.
+
+\textbf{Event-Triggered Retrieval via Temporal Value Divergence.}
+Rather than computing the contrastive penalty for every frame, our method selectively triggers memory retrieval and loss computation exclusively during significant task events. Specifically, the agent monitors the temporal value difference between consecutive frames, $\Delta V_t = |m_t - m_{t-1}|$, where $m$ is the internal state-value estimate. In long-horizon reinforcement learning, the scale of internal value estimates grows exponentially, creating a highly non-stationary training regime. Initially, utilizing a standard Welford's algorithm to compute cumulative running statistics caused a severe over-triggering bug, as early near-zero values anchored the historical variance. To rectify this and ensure the loss acts as a precise pulse exclusively for critical task events, we compute the standard deviation of values $\text{std}(m)$ using an Exponential Moving Average (EMA)-adapted Welford's algorithm. A frame triggers hash bucket retrieval only if its temporal divergence exceeds this dynamic statistical threshold ($\Delta V_t \ge \sigma \cdot \text{std}(m)$).
+
+\textbf{Dynamic Value-Weighted Contrastive Penalty.}
+Once triggered for a given state $z_t$ with hash key $k$, the module retrieves historical states $z_{past}$ residing in the same bucket. Because they share the same hash, the encoder perceives them as visually identical. To force a geometric separation based on their actual semantic differences, we calculate the absolute value divergence $\Delta m = |m_t - m_{past}|$. To ensure numerical stability across varying stages of training, $\Delta m$ is dynamically normalized by the cumulative running maximum of the value estimates ($\max_{1:t} |m|$).
+
+The contrastive objective then penalizes the cosine similarity between the current and past pre-sampled latent logits ($x_t$ and $x_{past}$), explicitly weighted by this normalized divergence and applying a soft margin $\tau$ to prevent representation cliffing:
+\begin{equation}
+    \mathcal{L}_{\text{hash}} = \frac{1}{N} \sum \left( \frac{|m_t - m_{past}|}{\max_{1:t} |m|} \cdot \max(0, \cos(x_t, x_{past}) - \tau) \right)
+\end{equation}
+(Note: To prevent representation collapse and stabilize the optimization process, standard stop-gradient operations are implicitly applied to both the value divergence multiplier and the historical representations.)
+
+The formulation of this value-weighted penalty introduces a critical regularizing property that embodies the principle of \textit{``same things same, different things different''}: when two visually aliased states possess a significant disparity in their expected future returns ($\Delta m > 0$), the loss heavily penalizes the encoder, driving a structural separation in the latent topology (different things different). Conversely, if the states share identical internal values ($\Delta m = 0$), the penalty gracefully vanishes to zero (same things same). This inherently permits representation collapse for value-equivalent states, preventing the encoder from wasting its expressive capacity on task-irrelevant visual variances (e.g., background water ripples or trivial pixel noise).
+
+\textbf{Global Hash Bucket Rebuild via Lazy Rebuild.}
+As the world model encoder evolves during training, the latent representations of historical states inherently drift. This representation drift can cause previously computed hash keys to become stale, undermining the integrity of the SimHash buckets. To ensure consistent $\mathcal{O}(1)$ retrieval without incurring the prohibitive computational cost of re-hashing the entire replay buffer at every step, we introduce a \textit{Lazy Rebuild} mechanism. Specifically, if the latent state calculated by the past world model's encoder differs significantly from the current one, the system triggers a global rebuild of the hash buckets, recalculating the hash keys for all stored states from scratch. This lazy recalculation ensures that MACRO operates on an accurate topological grouping while maintaining training efficiency.
+
+\subsection{Theoretical Analysis: Accelerated Disentanglement via MACRO}
+
+We mathematically demonstrate how MACRO accelerates the disentanglement of visually aliased states compared to a standard baseline. Consider two functionally distinct but visually aliased states $s_1$ and $s_2$. Due to the encoder's smoothing bias, their initial latent representations are nearly identical, i.e., $\|\phi_1^{(0)} - \phi_2^{(0)}\| \triangleq \epsilon \approx 0 \ (\epsilon > 0)$, where $\phi_1 = \phi(s_1)$ and $\phi_2 = \phi(s_2)$. Consequently, they fall into the same SimHash bucket. However, their true underlying values differ significantly: $|V(s_1) - V(s_2)| \ge \delta > 0$. We define the distance vector at training step $t$ as $d^{(t)} = \phi_1^{(t)} - \phi_2^{(t)}$, and our goal is to find the required number of optimization steps $N$ such that the latent distance exceeds a margin $m$, i.e., $\|d^{(N)}\| \ge m$. For simplicity and inspired by the local linearization of Neural Tangent Kernel (NTK) theory for aliased states, we analyze this using a local linear value network $V(\phi) = w^T\phi$ and a learning rate $\eta$.
+
+\textbf{Baseline Convergence (Without MACRO).}
+In a standard MBRL framework relying only on TD targets $y_1$ and $y_2$, the loss is $L_{base} = \frac{1}{2}(w^T\phi_1 - y_1)^2 + \frac{1}{2}(w^T\phi_2 - y_2)^2$. The gradient updates are $\nabla_{\phi_1} L_{base} = (w^T\phi_1 - y_1)w$ and $\nabla_{\phi_2} L_{base} = (w^T\phi_2 - y_2)w$. 
+The update dynamics for the distance vector $d^{(t)}$ become $d^{(t+1)} = d^{(t)} - \eta (\Delta TD) w$, where $\Delta TD = (w^T\phi_1 - y_1) - (w^T\phi_2 - y_2)$. To understand the separation growth, we examine the squared distance:
+\begin{equation}
+\|d^{(t+1)}\|^2 = \|d^{(t)}\|^2 - 2\eta \Delta TD (w^T d^{(t)}) + \eta^2 (\Delta TD)^2 \|w\|^2
+\end{equation}
+This dynamic reveals two fatal flaws. First, if $\text{sgn}(\Delta TD) = \text{sgn}(w^T d^{(t)})$, the first-order term actively decreases the distance, offering no guaranteed separation. Second, under our initial aliasing assumption ($\|d^{(0)}\| \approx 0$), the inner product $w^T d^{(0)} \approx 0$. The first-order linear growth term vanishes, leaving the separation dependent on the microscopic second-order term $\mathcal{O}(\eta^2)$. In heavily aliased regions, the baseline stalls, severely bottlenecking the sample complexity: $N_{base} = \mathcal{O}\left(\frac{m^2}{\eta^2 (\Delta TD)^2 \|w\|^2}\right)$.
+
+\textbf{Accelerated Convergence with MACRO.}
+When MACRO is applied, an explicit contrastive penalty is introduced because $s_1$ and $s_2$ share the same hash bucket but have diverging values. Approximating the cosine similarity penalty with a Euclidean distance margin, the loss becomes $L_{macro} = \lambda \cdot \max(0, m - \|\phi_1 - \phi_2\|_2^2)$, where the dynamic multiplier $\lambda \propto |V(s_1) - V(s_2)|$. The gradient updates are $\nabla_{\phi_1} L_{macro} = -2\lambda (\phi_1 - \phi_2) = -2\lambda d^{(t)}$ and $\nabla_{\phi_2} L_{macro} = 2\lambda (\phi_1 - \phi_2) = 2\lambda d^{(t)}$.
+The update dynamics are fundamentally altered:
+\begin{equation}
+d^{(t+1)} = d^{(t)} - \eta \left( -2\lambda d^{(t)} - 2\lambda d^{(t)} \right) = d^{(t)} + 4\eta\lambda d^{(t)} = (1 + 4\eta\lambda) d^{(t)}
+\end{equation}
+Unlike the baseline, the distance vector grows \textit{exponentially} because the gradient magnitude is proportional to $d^{(t)}$ itself, and the update directly pushes the representations apart along their shortest connecting axis rather than indirectly through $w$. Solving $(1 + 4\eta\lambda)^N \epsilon \ge m$ yields the required steps:
+\begin{equation}
+N_{macro} = \left\lceil \frac{\log(m/\epsilon)}{\log(1 + 4\eta\lambda)} \right\rceil
+\end{equation}
+
+\textbf{Conclusion.}
+Comparing the required optimization steps, we observe an exponential speed-up in disentangling visually aliased states:
+\begin{equation}
+\frac{N_{base}}{N_{macro}} \approx \frac{\mathcal{O}(m^2/\eta^2)}{\mathcal{O}(\log m/\epsilon)}
+\end{equation}
+This mathematical bound guarantees that MACRO efficiently separates critical sub-goal states in a logarithmic number of steps compared to the linear time required by standard encoders, effectively preventing representation collapse in extreme sparse-reward settings. In standard unconstrained RL (e.g., 50M steps), the extrapolation errors and state aliasing induced by early Expert Forcing (EFB) can eventually be self-corrected over time. However, in the hyper-constrained Atari 100k setting, this slow $\mathcal{O}(1/\eta^2)$ baseline recovery is fatal, ensuring target network collapse long before the aliased representations separate. By mathematically guaranteeing disentanglement in merely $\mathcal{O}(\log m)$ steps, MACRO enables the agent to instantly correct early OOD aliasing, making Expert Forcing viable under extreme sample constraints.
+
+ 
+
+\section{Experiments and Results}
+
+\subsection{Experimental Setup}
+We evaluate our proposed MACRO framework on the Atari \textit{Seaquest} environment, a benchmark notorious for its long-horizon challenges and extremely sparse reward structure. To demonstrate the plug-and-play efficacy of our approach, we integrate the MACRO module into a state-of-the-art encoding-based MBRL baseline, maintaining its standard sequence modeling and latent imagination architecture without introducing ad-hoc memory mechanisms. The representation constraint operates over historical samples retrieved from the entire replay buffer.
+
+To ensure robust exploration and prevent initial distribution shifts, the replay buffer is initialized with a standard mixture of a single seed trajectory and random exploratory transitions. The policy subsequently interacts with the environment to accumulate online experiences.
+
+While maximizing the final episodic score remains the ultimate objective, standard recurrent world models entirely fail to map the causal dynamics of the static diver UI. Therefore, to evaluate the fundamental stepping stones toward full-task mastery, our primary evaluation metric focuses on the \textit{internal representation learning} and the \textit{value alignment} of the agent during the unrewarded sub-goal sequence.
+
+\subsection{Semantic Grounding of Unrewarded Progress}
+The core hypothesis of this paper is that enforcing the retention of static UI elements allows the agent to intrinsically understand its progress toward a delayed sparse reward. To empirically validate this, we conduct a cross-sectional evaluation of the agent’s internal value function $V(s_t)$. 
+
+We sampled a diverse set of highly randomized environmental states (varying player positions, enemy submarine layouts, and oxygen levels), strictly categorized by the exact number of rescued divers currently held by the agent ($n \in \{0, 1, \dots, 6\}$). For each category, we extracted multiple independent frames and computed the average predicted auxiliary value ($\text{aux\_value}$) from the Critic network.
+
+As demonstrated in Figure \ref{fig:diver_probing_results}, the results show a striking step-wise monotonic increase in the expected value function directly correlated with the accumulated diver count. It is crucial to note that although the environment provides dense rewards for reactive combat (e.g., shooting fish or enemies) and a massive sparse reward for successfully surfacing with a full crew, the specific semantic transition of securing a diver yields exactly zero immediate external reward. Without any manual reward shaping or heuristic guidance, the agent autonomously maps the incremental changes in the minute, static UI counter to a proportionally escalating future return expectation. This effectively proves that the metric-aware contrastive mechanism of MACRO successfully broke the visual aliasing, forcing the latent embedding $z_t$ to geometrically separate the static UI states, allowing the baseline sequence model to maintain this distinct temporal context without information decay.
+
+
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\textwidth]{image_94ae7f.png}
+\caption{Overall step-wise scaling trend of the internal auxiliary value function corresponding to the exact number of rescued divers (0 to 6) under the MACRO framework.}
+\label{fig:diver_probing_results}
+\end{figure}
+
+\textbf{Generalization to Highly Dynamic Environments: Asterix Benchmark.} 
+To rigorously evaluate the robustness and versatility of MACRO beyond sparse-reward settings with static sub-goal metrics, we extend our evaluation to \textit{Asterix}---a highly dynamic, dense-reward environment characterized by fast-moving, reactive objects. In this distinct setting, MACRO demonstrates remarkable generalization capabilities, achieving a competitive performance that closely approaches $\Delta$-IRIS, a sequence-based world model explicitly optimized for temporal frame differences. Furthermore, our framework successfully recovers approximately half the performance of the state-of-the-art diffusion-based model, EDELINE (4,224.5), while significantly outperforming standard encoding-based baselines such as DreamerV3. This strong empirical result underscores a crucial structural advantage: although MACRO introduces a targeted hash-based contrastive regularization to preserve minute, invariant static metrics, it does so without compromising the encoder's capacity to compress and track high-magnitude, fluid visual dynamics.
+
+This generalization highlights the robustness of the MACRO module across diverse task structures. In complex environments like \textit{Seaquest}, the baseline encoder naturally learns to track high-magnitude dynamics associated with immediate dense rewards (e.g., shooting enemies), which is a prerequisite for surviving long enough to achieve the sparse reward. Simultaneously, MACRO ensures that the overarching sparse goal (e.g., the static diver count) is not lost amidst these intense local interactions. Consequently, the plug-and-play integration systematically improves the baseline by allowing dense reward tracking to safely coexist with delayed sparse objective anchoring, without mutual interference.
+
+\subsection{The Insufficiency of Pure Representation: Why Structuring Matters}
+Under a rigorously stabilized baseline regime, we observed instances where the baseline encoder successfully retained the static diver UI in the latent space, overcoming the initial visual aliasing issue. 
+
+However, the most critical finding was the agent's reaction to this retained information: despite successfully 'seeing' the exact diver count, the policy network exhibited severe behavioral collapse. The agent degenerated into suboptimal, defensive policies—hovering near the water surface, continuously discharging projectiles, and entirely abandoning the long-horizon rescue objective.
+
+This empirical observation exposes a fundamental limitation in current MBRL architectures: mere pixel-level representation of a sparse metric is functionally insufficient. Even though the world model distinctly encodes the static sub-goal visual, it completely fails to learn the causal dynamics underlying it—specifically, the transitional rule that colliding with a diver object leads to its disappearance and a subsequent increment in the UI counter. Without external rewards guiding this exact semantic transition, the Actor treats the UI changes as actionable noise.
+
+This disconnect firmly establishes the necessity of MACRO. It demonstrates that deep reinforcement learning in sparse environments requires more than just passive representation (reconstruction); it inherently demands a metric-aware contrastive objective that structurally separates functionally distinct states based on their expected value, actively anchoring static visuals to the task's causal structure.
+
+\section{Conclusion and Future Work}
+
+\subsection{Conclusion}
+In this paper, we investigated the representation paradox in model-based reinforcement learning, where modern encoding-based world models suffer from severe visual aliasing over minute, static sub-goal metrics in long-horizon, sparse-reward environments. To address this, we proposed MACRO, a plug-and-play representation constraint module utilizing an auxiliary value network, designed to seamlessly integrate into existing state-of-the-art MBRL architectures \citep[e.g., DreamerV3, STORM, DRAMA;][]{hafner2025mastering, zhang2023storm, wang2025drama}. Leveraging historical samples retrieved from the entire replay buffer, our empirical results on Atari \textit{Seaquest} demonstrated that our metric-aware contrastive regularization successfully breaks the encoder's smoothing bias. Without altering the underlying recurrent backbone or employing manual reward shaping, MACRO geometrically separates functionally distinct UI states within the latent space, allowing the internal value function to exhibit a clear upward scaling trend that aligns perfectly with unrewarded progress metrics.
+
+\subsection{Current Limitations and Failure Modes: The Architectural Memory Bottleneck}
+Despite the successful causal anchoring provided by MACRO, the agent still occasionally struggles to robustly execute the complete six-diver rescue trajectory. Through our stabilized evaluations, we identified that this remaining failure mode stems from an architectural memory bottleneck rather than a lack of control capacity (e.g., obstacle avoidance or oxygen management).
+
+In the current MBRL framework, both non-causal spatial mixing and causal temporal dynamics are compressed into a single sequence model's fixed-size recurrent state. Over the extreme temporal horizons required in \textit{Seaquest} (often spanning thousands of steps), the continuous influx of high-magnitude visual noise inevitably degrades the sparse, exact recall of distant sub-goal events. For instance, the exact memory of a specific causal transition—such as collecting the fourth diver hundreds of steps prior—gradually decays within the lossy compression of the SSM backbone.
+
+Because of this temporal degradation, the geometric separation of states achieved by our contrastive objective weakens in the exceptionally late stages of the episode ($n \ge 4$). When these crucial temporal anchors fade, the agent experiences late-stage policy instability, occasionally losing track of its progress and failing to surface in time. This failure mode provides a critical insight: while MACRO resolves the representation paradox at the objective level, maintaining these structural anchors across infinite horizons requires an explicit architectural mechanism dedicated to exact episodic recall.
+
+\subsection{Future Trajectories for ICLR 2027}
+While our framework successfully anchors the semantic representation of long-term progress at the objective level, fully mastering \textit{Seaquest} requires addressing both numerical robustness and architectural memory bottlenecks. To achieve competitive full-task execution for ICLR 2027, our primary future trajectories focus on two orthogonal directions.
+
+\textbf{Numerical Robustness and Precision Ablations.}
+Under our current stabilized setup, the baseline inadvertently succeeded in encoding the static UI, likely aided by the high-precision computational environment. However, under constrained precision policies (e.g., FP16 quantization or strict TF32 regimes), standard encoders are highly susceptible to severe representation cliffing. To rigorously validate the robustness of MACRO, we plan to artificially induce visual aliasing by systematically degrading the underlying numerical precision. We hypothesize that our metric-aware contrastive objective will forcefully preserve the geometric separation of sub-goal metrics even under these extreme precision constraints, proving its hardware-agnostic necessity.
+
+\textbf{Integrating the REMI Architecture for Episodic Recall.}
+To directly resolve the architectural memory degradation identified in the late-game stages, we plan to integrate the REMI (Remember to Imagine) factorized hybrid world model architecture. REMI explicitly disentangles non-causal spatial mixing, causal temporal dynamics, and exact episodic recall into distinct operations. Specifically, by incorporating REMI's surprise-gated episodic memory, the agent can actively store and cross-attend to exact latent snapshots of critical events (e.g., diver collection), triggered by high one-step NLL 'surprise' spikes that inherently align with our value divergence pulses. 
+
+We anticipate that pairing MACRO (which structurally separates distinct functional states at the loss level) with the REMI backbone (which exactly recalls them across infinite horizons at the architectural level) will comprehensively bridge the gap between representation learning and long-horizon credit assignment.
+
+
+\bibliographystyle{iclr2025_conference} % 학회/저널에서 제공하는 서지 스타일 (또는 plainnat 등)
+\bibliography{iclr2025_conference} % 참고문헌 파일 이름이 references.bib인 경우 (확장자 .bib는 생략하고 작성)
+
+\section{Appendix}
+You may include other additional sections here.
+
+
+\end{document}

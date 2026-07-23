@@ -153,16 +153,44 @@ class ActorCriticAgent(nn.Module):
         self.lowerbound_ema = EMAScalar(decay=0.99)
         self.upperbound_ema = EMAScalar(decay=0.99)
 
+        self.stateless_feat_dim = conf.Models.WorldModel.CategoricalDim * conf.Models.WorldModel.ClassDim
+        
+        self.enable_critic_probe = getattr(conf.Models.Agent.AC, 'EnableCriticProbe', True)
+        if self.enable_critic_probe:
+            probe = []
+            probe.extend([
+                layer_init(nn.Linear(self.stateless_feat_dim, critic_hidden_dim, bias=True)),
+                RMSNorm(critic_hidden_dim),
+                act()
+            ])
+            for i in range(num_layers - 1):
+                probe.extend([
+                    layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)),
+                    RMSNorm(critic_hidden_dim),
+                    act()
+                ])
+            self.critic_probe_net = nn.Sequential(
+                *probe,
+                layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)
+            ).to(device)
+
+        main_params = [p for n, p in self.named_parameters() if 'critic_probe' not in n]
+
         if conf.Models.Agent.AC.Optimiser == 'Laprop':
-            self.optimizer = LaProp(self.parameters(), lr=conf.Models.Agent.AC.Laprop.LearningRate, eps=conf.Models.Agent.AC.Laprop.Epsilon)
+            self.optimizer = LaProp(main_params, lr=conf.Models.Agent.AC.Laprop.LearningRate, eps=conf.Models.Agent.AC.Laprop.Epsilon)
         elif conf.Models.Agent.AC.Optimiser == 'Adam':
             self.optimizer = torch.optim.Adam(
-                self.parameters(), 
+                main_params, 
                 lr=conf.Models.Agent.AC.Adam.LearningRate, 
                 eps=conf.Models.Agent.AC.Adam.Epsilon
             )
         else:
             raise ValueError(f"Unknown optimiser: {conf.Models.Agent.AC.Optimiser}")
+            
+        if self.enable_critic_probe:
+            probe_lr = conf.Models.Agent.AC.Adam.LearningRate if conf.Models.Agent.AC.Optimiser == 'Adam' else conf.Models.Agent.AC.Laprop.LearningRate
+            self.critic_probe_optimizer = torch.optim.Adam(self.critic_probe_net.parameters(), lr=probe_lr)
+            
         # self.optimizer = AGC(self.parameters(), self.optimizer)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.AC.Warmup_steps)
@@ -253,11 +281,29 @@ class ActorCriticAgent(nn.Module):
 
         # gradient descent
         self.scaler.scale(loss).backward()
+        
+        if hasattr(self, 'critic_probe_net'):
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+                stateless_latent = latent[:, :-1, :self.stateless_feat_dim].detach()
+                target_value = value[:, :-1].detach()
+                
+                probe_raw_value = self.critic_probe_net(stateless_latent)
+                probe_loss = self.symlog_twohot_loss(probe_raw_value, target_value)
+            self.scaler.scale(probe_loss).backward()
+            
         self.scaler.unscale_(self.optimizer)  # for clip grad
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
+        main_params = [p for n, p in self.named_parameters() if 'critic_probe' not in n]
+        torch.nn.utils.clip_grad_norm_(main_params, max_norm=self.max_grad_norm)
+        
         self.scaler.step(self.optimizer)
+        if hasattr(self, 'critic_probe_net'):
+            self.scaler.step(self.critic_probe_optimizer)
+            
         self.scaler.update()
         self.optimizer.zero_grad(set_to_none=True)
+        if hasattr(self, 'critic_probe_net'):
+            self.critic_probe_optimizer.zero_grad(set_to_none=True)
+            
         self.lr_scheduler.step()
         self.warmup_scheduler.dampen()
         self.update_slow_critic()
@@ -269,6 +315,8 @@ class ActorCriticAgent(nn.Module):
             logger.log('ActorCritic/S', S.item(), global_step=global_step)
             logger.log('ActorCritic/norm_ratio', norm_ratio.item(), global_step=global_step)
             logger.log('ActorCritic/total_loss', loss.item(), global_step=global_step)
+            if hasattr(self, 'critic_probe_net'):
+                logger.log('ActorCritic/critic_probe_loss', probe_loss.item(), global_step=global_step)
 
 
 

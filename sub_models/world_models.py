@@ -258,6 +258,7 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
 class WorldModel(nn.Module):
     def __init__(self, action_dim, config, device, is_discrete=True):
         super().__init__()
+        self.config = config
         self.hidden_state_dim = config.Models.WorldModel.HiddenStateDim
         self.final_feature_width = config.Models.WorldModel.Transformer.FinalFeatureWidth
         self.categorical_dim = config.Models.WorldModel.CategoricalDim
@@ -735,8 +736,6 @@ class WorldModel(nn.Module):
                 )
                 total_loss = total_loss + macro_loss
                 if logger is not None:
-                    for k, v in self.macro_loss.debug_metrics.items():
-                        logger.log(f"MacroLoss/{k}", v, global_step=global_step)
                     logger.log("WorldModel/macro_loss", macro_loss.item(), global_step=global_step)
                     logger.log("WorldModel/macro_distill_loss", m_distill_loss.item(), global_step=global_step)
                     logger.log("WorldModel/macro_contrastive_loss", m_contrastive_loss.item(), global_step=global_step)
@@ -754,6 +753,30 @@ class WorldModel(nn.Module):
         if self.macro_loss is not None:
             self.macro_loss.update_slow_target(decay=0.98)
 
+        if logger is not None and hasattr(self.macro_loss, 'debug_metrics'):
+            for metric_name, metric_value in self.macro_loss.debug_metrics.items():
+                logger.log(f"MacroDebug/{metric_name}", metric_value, global_step=global_step)
+
+        if logger is not None and 't_mask_orig' in locals() and t_mask_orig is not None:
+            b_indices, t_indices = torch.where(t_mask_orig)
+            if b_indices.numel() > 0:
+                num_frames = min(4, b_indices.numel())
+                
+                b_sel = b_indices[:num_frames]
+                t_sel = t_indices[:num_frames]
+                t_prev = torch.clamp(t_sel - 1, min=0)
+                
+                prev_frames = torch.clamp(obs[b_sel, t_prev] * 255, 0, 255).permute(0, 2, 3, 1).cpu().detach().numpy().astype(np.uint8)
+                curr_frames = torch.clamp(obs[b_sel, t_sel] * 255, 0, 255).permute(0, 2, 3, 1).cpu().detach().numpy().astype(np.uint8)
+                
+                row_prev = np.concatenate([prev_frames[i] for i in range(num_frames)], axis=1)
+                row_curr = np.concatenate([curr_frames[i] for i in range(num_frames)], axis=1)
+                combined_trigger = np.concatenate([row_prev, row_curr], axis=0)
+                
+                h, w, c = combined_trigger.shape
+                resized_trigger = cv2.resize(combined_trigger, (w * 4, h * 4), interpolation=cv2.INTER_AREA)
+                logger.log("MacroLoss/Triggered_images", [resized_trigger], global_step=global_step)
+
         if (global_step + epoch_step) % self.save_every_steps == 0: # and global_step != 0:
             sample_obs = torch.clamp(obs[:3, 0, :]*255, 0, 255).permute(0, 2, 3, 1).cpu().detach().float().numpy().astype(np.uint8)
             sample_obs_hat = torch.clamp(obs_hat[:3, 0, :]*255, 0, 255).permute(0, 2, 3, 1).cpu().detach().float().numpy().astype(np.uint8)
@@ -770,8 +793,180 @@ class WorldModel(nn.Module):
             final_image_resized = cv2.resize(final_image, (width * scale_factor, height * scale_factor), interpolation=cv2.INTER_NEAREST)
             logger.log("Reconstruct/Reconstructed images", [final_image_resized], global_step=global_step)
                          
-            
 
-        return  reconstruction_loss.item(), reward_loss.item(), termination_loss.item(), \
-                dynamics_loss.item(), dynamics_real_kl_div.item(), representation_loss.item(), \
-                representation_real_kl_div.item(), total_loss.item()
+            # ==========================================================
+            # [추가] 합성된 64x64 이미지를 이용한 특정 UI 상태(Diver, Oxygen, Lives)의 aux_value 모니터링
+            # ==========================================================
+            import os
+            
+            _diff_type = getattr(self.macro_loss, 'diff_type', 'reward')
+            _trigger_type = getattr(self.macro_loss, 'trigger_type', 'reward')
+            if _diff_type in ['aux_value', 'aux_value_diff'] or _trigger_type in ['aux_value', 'aux_value_diff']:
+                try:
+                    # 1. 디스크 I/O 병목 방지를 위한 텐서 캐싱 (1회만 로드)
+                    if not hasattr(self, "_cached_probing_tensors"):
+                        self._cached_probing_tensors = {}
+                        current_img_size = self.config.Models.WorldModel.Encoder.InputSize[1]
+                        env_name_full = getattr(self.config.BasicSettings, "Env_name", "")
+                        game_name = env_name_full.split("/")[-1].split("-")[0].lower() if env_name_full else "seaquest"
+                        
+                        base_probing_path = f"/media/storage_data/ai2lab/choemj/graduate_research/Probing_Images/{game_name}"
+                        
+                        if game_name == "frostbite":
+                            categories = {
+                                "IglooBlocks": f"{base_probing_path}/{current_img_size}_selected_igloos",
+                                "Temperature": f"{base_probing_path}/{current_img_size}_selected_temperature",
+                                "Lives": f"{base_probing_path}/{current_img_size}_selected_lives"
+                            }
+                        elif game_name == "hero":
+                            categories = {
+                                "Dynamite": f"{base_probing_path}/{current_img_size}_selected_dynamites",
+                                "Power": f"{base_probing_path}/{current_img_size}_selected_power",
+                                "Lives": f"{base_probing_path}/{current_img_size}_selected_lives"
+                            }
+                        elif game_name == "choppercommand":
+                            categories = {
+                                "Trucks": f"{base_probing_path}/{current_img_size}_selected_trucks",
+                                "Lives": f"{base_probing_path}/{current_img_size}_selected_lives"
+                            }
+                        else: # seaquest or default
+                            categories = {
+                                "Diver": f"{base_probing_path}/{current_img_size}_selected_divers",
+                                "Oxygen": f"{base_probing_path}/{current_img_size}_selected_oxygen",
+                                "Lives": f"{base_probing_path}/{current_img_size}_selected_lives"
+                            }
+                            if current_img_size == 64:
+                                categories["Distance"] = f"{base_probing_path}/64_sea_divers"
+                        
+                        for category_name, folder_path in categories.items():
+                            alt_path = folder_path.split("/")[-1]
+                            if os.path.exists(alt_path):
+                                folder_path = alt_path
+                            elif not os.path.exists(folder_path):
+                                continue
+                            
+                            category_tensors = {}
+                            grouped_imgs = {}
+                            
+                            for img_name in sorted(os.listdir(folder_path)):
+                                if not img_name.endswith('.png'): continue
+                                try:
+                                    if category_name == "Distance":
+                                        parts = img_name.split('.')[0].split('_')
+                                        state_val = f"{parts[-2]}_{parts[-1]}"
+                                    else:
+                                        if "_var_" in img_name:
+                                            parts = img_name.split('.')[0].split('_')
+                                            var_idx = parts.index('var')
+                                            state_val = parts[var_idx - 1]
+                                        else:
+                                            state_val = img_name.split('_')[-1].split('.')[0]
+                                except:
+                                    continue
+                                    
+                                img_path = os.path.join(folder_path, img_name)
+                                img = cv2.imread(img_path)
+                                if img is None: continue
+                                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                                img = img.transpose(2, 0, 1) # HWC -> CHW (3, 64, 64)
+                                
+                                if state_val not in grouped_imgs:
+                                    grouped_imgs[state_val] = []
+                                grouped_imgs[state_val].append(img)
+                                
+                            for state_val, img_list in grouped_imgs.items():
+                                if img_list:
+                                    imgs_arr = np.stack(img_list, axis=0) # [M, 3, 64, 64]
+                                    t = torch.from_numpy(imgs_arr).to(device=self.device, dtype=self.tensor_dtype) / 255.0
+                                    t = rearrange(t, "M C H W -> M 1 C H W")
+                                    category_tensors[state_val] = t
+                            
+                            if category_tensors:
+                                self._cached_probing_tensors[category_name] = category_tensors
+
+                    if getattr(self, "_cached_probing_tensors", {}):
+                        with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+                            self.eval()
+                            try:
+                                log_dict = {}
+                                for cat_name, state_dict in self._cached_probing_tensors.items():
+                                    latents_dict = {}
+                                    for state_val, t in state_dict.items():
+                                        latent = self.encode_obs(t, sample_mode="mode")
+                                        latents_dict[state_val] = latent
+                                        aux_value_symlog = self.macro_loss.aux_value_net(latent).squeeze(-1) # [M, 1]
+                                        slow_aux_value_symlog = self.macro_loss.slow_aux_value_net(latent).squeeze(-1)
+                                        
+                                        def symexp_local(x):
+                                            return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
+                                        
+                                        aux_value_linear = symexp_local(aux_value_symlog)
+                                        mean_val = aux_value_linear.mean().item()
+                                        
+                                        slow_aux_value_linear = symexp_local(slow_aux_value_symlog)
+                                        slow_mean_val = slow_aux_value_linear.mean().item()
+                                        
+                                        log_dict[f"Probing/{cat_name}_{state_val}_AuxValue_Mean"] = mean_val
+                                        log_dict[f"Probing_Slow/{cat_name}_{state_val}_AuxValue_Mean"] = slow_mean_val
+                                        
+                                        if agent is not None and hasattr(agent, 'critic_probe_net'):
+                                            stateless_latent = latent[..., :agent.stateless_feat_dim]
+                                            probe_raw_value = agent.critic_probe_net(stateless_latent)
+                                            probe_value = agent.symlog_twohot_loss.decode(probe_raw_value).squeeze(-1)
+                                            log_dict[f"Probing_Critic/{cat_name}_{state_val}_Mean"] = probe_value.mean().item()
+                                            
+                                        recon_obs = self.image_decoder(latent)
+                                        recon_mse = F.mse_loss(recon_obs, t).item()
+                                        log_dict[f"Probing_Recon_MSE/{cat_name}_{state_val}"] = recon_mse
+                                        
+                                    if cat_name in ["Diver", "IglooBlocks", "Dynamite", "Trucks"]:
+                                        diver_counts = sorted([int(k) for k in latents_dict.keys() if k.isdigit()])
+                                        delta_sims = {}
+                                        for i in range(len(diver_counts)):
+                                            for j in range(i + 1, len(diver_counts)):
+                                                c1 = diver_counts[i]
+                                                c2 = diver_counts[j]
+                                                l1 = latents_dict[str(c1)]
+                                                l2 = latents_dict[str(c2)]
+                                                
+                                                if l1.shape == l2.shape:
+                                                    sim = F.cosine_similarity(l1, l2, dim=-1).mean().item()
+                                                else:
+                                                    l1_exp = l1.unsqueeze(1) # [M1, 1, D]
+                                                    l2_exp = l2.unsqueeze(0) # [1, M2, D]
+                                                    sim = F.cosine_similarity(l1_exp, l2_exp, dim=-1).mean().item()
+                                                    
+                                                log_dict[f"Probing_CosSim_Detail/{c1}_vs_{c2}"] = sim
+                                                
+                                                delta = c2 - c1
+                                                if delta not in delta_sims:
+                                                    delta_sims[delta] = []
+                                                delta_sims[delta].append(sim)
+                                                        
+                                        for delta, sims in delta_sims.items():
+                                            if sims:
+                                                log_dict[f"Probing_CosSim_Delta/Delta_{delta}_Mean"] = sum(sims) / len(sims)
+                            finally:
+                                self.train() 
+                            
+                            if logger is not None and log_dict:
+                                for k, v in log_dict.items():
+                                    logger.log(k, v, global_step=global_step)
+
+                except Exception as e:
+                    print(f"Failed to log probing images: {e}")
+        return (
+            reconstruction_loss.item(),
+            reward_loss.item(),
+            termination_loss.item(),
+            dynamics_loss.item(),
+            dynamics_real_kl_div.item(),
+            representation_loss.item(),
+            representation_real_kl_div.item(),
+            total_loss.item(),
+            0.0, # contrastive_loss
+            0.0, # contrastive_acc
+            macro_loss.item() if hasattr(macro_loss, 'item') else macro_loss,
+            m_distill_loss.item() if hasattr(m_distill_loss, 'item') else m_distill_loss,
+            m_contrastive_loss.item() if hasattr(m_contrastive_loss, 'item') else m_contrastive_loss,
+        )

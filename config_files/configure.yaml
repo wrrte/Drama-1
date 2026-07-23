@@ -14,13 +14,13 @@ Evaluate:
    EpisodeNum: 10
    NumEnvs: 10
    DuringTraining: True
-   EverySteps: 1000
+   EverySteps: 2000
 
 JointTrainAgent:
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k
   BufferMaxLength: 100000
-  WorldModelWarmUp: 1032
-  BehaviourWarmUp: 1032
+  WorldModelWarmUp: 1792
+  BehaviourWarmUp: 1792
   NumEnvs: 1
   BatchSize: 16
   BatchLength: 128
@@ -74,7 +74,6 @@ Models:
       HashBits: 10
       MaxQueuePerKey: 100000
       MaxPastSamples: 16
-      MaxPairsPerBatch: 2048
       LossScale: 10
       LazyRebuild:
         Enable: true
@@ -179,6 +178,6 @@ Models:
         HiddenUnits: 512 # Andrychowicz2020 wider critic network seems better  
 Wandb:
   Init:
-    Mode: disabled
+    Mode: online
     Project: Mamba_dreamer
 n: standard
