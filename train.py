@@ -278,9 +278,7 @@ def joint_train_world_model_agent(config, logdir,
             agent_time = time.time() - agent_start_time
 
         if total_steps % 100 == 0:
-            logger.log("time/env_step_time", env_time, global_step=total_steps)
-            logger.log("time/world_model_time", world_model_time, global_step=total_steps)
-            logger.log("time/agent_time", agent_time, global_step=total_steps)
+            pass # Time logging removed at user request
 
         if config.Evaluate.DuringTraining and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
             _ = eval_episodes(config, world_model, agent, logger, total_steps)
