@@ -1,7 +1,7 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-os.environ["MUJOCO_GL"] = "osmesa"
-os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["MUJOCO_GL"] = "osmesa"
+# os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 import gymnasium
 import argparse
 import numpy as np
@@ -21,7 +21,7 @@ from line_profiler import profile
 import yaml
 from envs.my_memory_maze import MemoryMaze
 from envs.my_atari import Atari
-from env.my_dmc import DMControl
+from envs.my_dmc import DMControl
 from eval import eval_episodes
 import warnings
 import ast
@@ -104,8 +104,10 @@ def joint_train_world_model_agent(config, logdir,
 
     if config.BasicSettings.Env_name.startswith('ALE'):
         env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
+        is_discrete = True
     elif config.BasicSettings.Env_name.startswith('memory'):
         env = MemoryMaze(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
+        is_discrete = True
     elif config.BasicSettings.Env_name.startswith('dm_'):
         # Parse dm_control environment name: dm_domain_task
         # Example: dm_cheetah_run, dm_walker_walk, dm_humanoid_stand
