@@ -406,11 +406,11 @@ class WorldModel(nn.Module):
             self.macro_loss = None
 
     @profile
-    def encode_obs(self, obs):
+    def encode_obs(self, obs, sample_mode="random_sample"):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
-            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+            sample = self.stright_throught_gradient(post_logits, sample_mode=sample_mode)
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
 
@@ -810,7 +810,7 @@ class WorldModel(nn.Module):
                         env_name_full = getattr(self.config.BasicSettings, "Env_name", "")
                         game_name = env_name_full.split("/")[-1].split("-")[0].lower() if env_name_full else "seaquest"
                         
-                        base_probing_path = f"/media/storage_data/ai2lab/choemj/graduate_research/Probing_Images/{game_name}"
+                        base_probing_path = f"Probing_Images/{game_name}"
                         
                         if game_name == "frostbite":
                             categories = {

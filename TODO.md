@@ -1,4 +1,4 @@
-
+데모 구현하면서 Hero, forstbite 보상 1번만 받도록 데모 데이터 수정해야함.
 
 3. Demonstration (단일 시드 궤적을 이용한 Replay Buffer 초기화)
 보상이 극도로 희소한 환경에서 에이전트에게 "숨겨진 희소 보상의 존재"와 그 인과적 진행 과정을 알려주기 위해, 단 하나의 시드 궤적(Seed Trajectory)을 버퍼에 포함시키는 기법입니다. 논문에서 언급된 "A Single Seed Trajectory" 개념입니다.
@@ -21,6 +21,9 @@ graduate_research/sub_models/macro_loss.py 및 graduate_research/agents.py: 설�
 
 
 
+억지로 0 값을 wandb에 고정 출력하게 해둔 부분 그냥 기록 안 하게 수정하기
+
+
 # Sonnet에게 논문 보여주고 의도대로 잘 작성되었는지 검토해달라고 하기.
 
 나도 코드 쭈욱 읽어보고 의도와 다른 부분 없는지 검토
@@ -28,4 +31,4 @@ graduate_research/sub_models/macro_loss.py 및 graduate_research/agents.py: 설�
 
 # JAX 변환 계획
 
-일단 lazy rebuild를 적용한 것과 적용하지 않은 걸 10시간 들여서 성능을 비교해보자. 그래서 비슷하면 LazyRebuild에서 캐시된 latent(item_latents)를 그대로 쓰고 CNN 재인코딩을 건너뛰도록 하여 jax로 변환하고, 성능이 떨어지면 그냥 10시간 들여서 하는 식으로.
+일단 lazy rebuild를 적용한 것과 적용하지 않은 걸 7시간 들여서 성능을 비교해보자. 그래서 비슷하면 LazyRebuild에서 캐시된 latent(item_latents)를 그대로 쓰고 CNN 재인코딩을 건너뛰도록 하여 jax로 변환하고, 성능이 떨어지면 그냥 7시간 들여서 하는 식으로.
