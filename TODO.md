@@ -18,3 +18,9 @@ graduate_research/sub_models/macro_loss.py 및 graduate_research/agents.py: 설�
 
 
 따라서 Drama 저장소에 적용해야 할 최우선 대상은 1) macro_loss.py 전체 모듈의 이식, 2) World Model 내 인코더-Latent 출력 구간에 MacroLoss 결합, 그리고 3) replay_buffer.py에 Demonstration 샘플링 비율 로직 추가가 되겠습니다.
+
+
+
+# JAX 변환 계획
+
+일단 lazy rebuild를 적용한 것과 적용하지 않은 걸 10시간 들여서 성능을 비교해보자. 그래서 비슷하면 LazyRebuild에서 캐시된 latent(item_latents)를 그대로 쓰고 CNN 재인코딩을 건너뛰도록 하여 jax로 변환하고, 성능이 떨어지면 그냥 10시간 들여서 하는 식으로.

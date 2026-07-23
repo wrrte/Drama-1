@@ -324,17 +324,38 @@ class MacroLoss(nn.Module):
         self.item_bucket[idx_ints] = keys_int
         
         # FIFO Queue 순차 삽입
-        for i in range(len(keys)):
-            k = int(keys_int[i].item())
-            idx = int(idx_ints[i].item())
+        # FIFO Queue Bulk Update (CPU-GPU Sync 최소화)
+        self._bulk_update_buckets(keys_int, idx_ints)
+
+    def _bulk_update_buckets(self, keys_int, idx_ints):
+        if len(keys_int) == 0:
+            return
             
-            head = int(self.bucket_head[k].item())
-            self.bucket_queues[k, head] = idx
-            self.bucket_head[k] = (head + 1) % self.max_queue_per_key
+        keys_cpu = keys_int.cpu().numpy()
+        idx_cpu = idx_ints.cpu().numpy()
+        
+        heads_cpu = self.bucket_head.cpu().numpy()
+        sizes_cpu = self.bucket_size.cpu().numpy()
+        
+        update_k = []
+        update_head = []
+        update_idx = []
+        
+        for k, idx in zip(keys_cpu, idx_cpu):
+            head = heads_cpu[k]
+            update_k.append(k)
+            update_head.append(head)
+            update_idx.append(idx)
             
-            s = int(self.bucket_size[k].item())
-            if s < self.max_queue_per_key:
-                self.bucket_size[k] = s + 1
+            heads_cpu[k] = (head + 1) % self.max_queue_per_key
+            if sizes_cpu[k] < self.max_queue_per_key:
+                sizes_cpu[k] += 1
+                
+        if len(update_k) > 0:
+            # 1회 텐서 변환 및 1회 인덱싱으로 모든 업데이트 처리
+            self.bucket_queues[update_k, update_head] = torch.tensor(update_idx, device=self.bucket_queues.device, dtype=self.bucket_queues.dtype)
+            self.bucket_head.copy_(torch.from_numpy(heads_cpu))
+            self.bucket_size.copy_(torch.from_numpy(sizes_cpu))
 
     def _rebuild_all_hash_buckets(self, replay_buffer, encode_fn, latent_dtype=torch.float32, extra_items=None):
         self.global_rebuild_count += 1
@@ -384,17 +405,8 @@ class MacroLoss(nn.Module):
             self.item_latents[idx_ints] = latent.detach().to(self.item_latents.dtype)
             self.item_bucket[idx_ints] = keys_int
             
-            for j in range(len(keys)):
-                k = int(keys_int[j].item())
-                idx = int(idx_ints[j].item())
-                
-                head = int(self.bucket_head[k].item())
-                self.bucket_queues[k, head] = idx
-                self.bucket_head[k] = (head + 1) % self.max_queue_per_key
-                
-                s = int(self.bucket_size[k].item())
-                if s < self.max_queue_per_key:
-                    self.bucket_size[k] = s + 1
+            # FIFO Queue Bulk Update
+            self._bulk_update_buckets(keys_int, idx_ints)
 
     def log_detailed_distribution(self, logger, global_step):
         if logger is None:
