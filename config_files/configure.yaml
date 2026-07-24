@@ -26,8 +26,8 @@ Demonstration:
   WorldModelDemoRatio: 0.1
 
   AgentDemoRatio: 0.0
-  AgentDemoRatioStartStep: 5000
-  AgentDemoRatioPeakStep: 6000
+  AgentDemoRatioStartStep: 3000
+  AgentDemoRatioPeakStep: 4000
   AgentDemoRatioPeak: 0.1
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
@@ -121,7 +121,7 @@ Models:
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
-      Enable: false
+      Enable: true
       UseAuxValueNet: false
       Scale: 20.0
       MaxWeight: 100.0
@@ -170,7 +170,7 @@ Models:
     Policy: AC # AC or PPO
     Unimix_ratio: 0
     AC:
-      EnableCriticProbe: false
+      EnableCriticProbe: true
       NumLayers: 3    
       Gamma: 0.985
       Lambda: 0.95
