@@ -438,21 +438,47 @@ class MacroLoss(nn.Module):
             # FIFO Queue Bulk Update
             self._bulk_update_buckets(keys_int, idx_ints)
 
-    def log_detailed_distribution(self, logger, global_step):
+    def log_detailed_distribution(self, logger, global_step, replay_buffer=None):
         if logger is None:
             return
             
-        all_keys_for_hist = []
+        demo_size = getattr(replay_buffer, 'protect_size', 0) if replay_buffer else 0
+        
+        hist_data = []
         data_for_bar = []
         
-        sizes = [len(b) for b in self.buckets]
-        for k, size in enumerate(sizes):
+        for k, bucket in enumerate(self.buckets):
+            size = len(bucket)
             if size > 0:
-                all_keys_for_hist.extend([k] * size)
+                demo_count = 0
+                agent_count = 0
+                if demo_size > 0:
+                    for idx in bucket:
+                        val = idx.item() if hasattr(idx, 'item') else idx
+                        if val < demo_size:
+                            demo_count += 1
+                        else:
+                            agent_count += 1
+                else:
+                    agent_count = size
+                    
+                if agent_count > 0:
+                    hist_data.extend([[k, "Agent"]] * agent_count)
+                if demo_count > 0:
+                    hist_data.extend([[k, "Demo"]] * demo_count)
+                    
                 data_for_bar.append([str(k), size])
                 
+        if hist_data:
+            logger.log("MacroLoss/bucket_distribution_split_hist", (
+                hist_data, 
+                ["Bucket ID", "Type"], 
+                "Bucket ID", 
+                "Type", 
+                "Bucket Distribution (Agent vs Demo)"
+            ), global_step=global_step)
+            
         if data_for_bar:
-            logger.log("MacroLoss/bucket_distribution_hist", all_keys_for_hist, global_step=global_step)
             logger.log("MacroLoss/bucket_sizes_bar", (
                 data_for_bar, 
                 ["Bucket ID", "Item Count"], 

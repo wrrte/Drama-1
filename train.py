@@ -567,7 +567,7 @@ def joint_train_world_model_agent(config, logdir,
             _ = eval_episodes(config, world_model, agent, logger, total_steps)
             
             if hasattr(world_model, 'macro_loss') and hasattr(world_model.macro_loss, 'log_detailed_distribution'):
-                world_model.macro_loss.log_detailed_distribution(logger, total_steps)
+                world_model.macro_loss.log_detailed_distribution(logger, total_steps, replay_buffer=replay_buffer)
         if config.JointTrainAgent.SaveModels and total_steps % (config.JointTrainAgent.SaveEverySteps // config.JointTrainAgent.NumEnvs) == 0:
             print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
             torch.save(world_model.state_dict(), f"{logdir}/ckpt/world_model.pth")

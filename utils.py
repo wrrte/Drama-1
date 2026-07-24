@@ -79,6 +79,11 @@ class WandbLogger:
         elif "hist" in tag:
             # Log histogram
             wandb.log({tag: wandb.Histogram(value)}, step=global_step)
+        elif "split_hist" in tag:
+            # Log split histogram
+            data, columns, value_col, split_col, title = value
+            table = wandb.Table(data=data, columns=columns)
+            wandb.log({tag: wandb.plot.histogram(table, value_col, title=title, split=split_col)}, step=global_step)
         elif "bar" in tag:
             # Log bar chart
             data, columns, x, y, title = value
