@@ -935,15 +935,32 @@ class WorldModel(nn.Module):
                                         recon_mse = F.mse_loss(recon_obs, t).item()
                                         log_dict[f"Probing_Recon_MSE/{cat_name}_{state_val}"] = recon_mse
                                         
-                                    if cat_name in ["Diver", "IglooBlocks", "Dynamite", "Trucks"]:
-                                        diver_counts = sorted([int(k) for k in latents_dict.keys() if k.isdigit()])
+                                    if cat_name in ["Diver", "IglooBlocks", "Dynamite", "Trucks", "Distance"]:
+                                        if cat_name == "Distance":
+                                            import re
+                                            counts_and_keys = []
+                                            for k in latents_dict.keys():
+                                                nums = re.findall(r'\d+', k)
+                                                if nums:
+                                                    counts_and_keys.append((int(nums[-1]), k))
+                                            counts_and_keys.sort(key=lambda x: x[0])
+                                            diver_counts = [x[0] for x in counts_and_keys]
+                                            key_map = {x[0]: x[1] for x in counts_and_keys}
+                                            prefix_detail = "Probing_CosSim_Detail_Distance"
+                                            prefix_delta = "Probing_CosSim_Delta_Distance"
+                                        else:
+                                            diver_counts = sorted([int(k) for k in latents_dict.keys() if k.isdigit()])
+                                            key_map = {c: str(c) for c in diver_counts}
+                                            prefix_detail = "Probing_CosSim_Detail"
+                                            prefix_delta = "Probing_CosSim_Delta"
+
                                         delta_sims = {}
                                         for i in range(len(diver_counts)):
                                             for j in range(i + 1, len(diver_counts)):
                                                 c1 = diver_counts[i]
                                                 c2 = diver_counts[j]
-                                                l1 = latents_dict[str(c1)]
-                                                l2 = latents_dict[str(c2)]
+                                                l1 = latents_dict[key_map[c1]]
+                                                l2 = latents_dict[key_map[c2]]
                                                 
                                                 if l1.shape == l2.shape:
                                                     sim = F.cosine_similarity(l1, l2, dim=-1).mean().item()
@@ -952,7 +969,7 @@ class WorldModel(nn.Module):
                                                     l2_exp = l2.unsqueeze(0) # [1, M2, D]
                                                     sim = F.cosine_similarity(l1_exp, l2_exp, dim=-1).mean().item()
                                                     
-                                                log_dict[f"Probing_CosSim_Detail/{c1}_vs_{c2}"] = sim
+                                                log_dict[f"{prefix_detail}/{c1}_vs_{c2}"] = sim
                                                 
                                                 delta = c2 - c1
                                                 if delta not in delta_sims:
@@ -961,7 +978,7 @@ class WorldModel(nn.Module):
                                                         
                                         for delta, sims in delta_sims.items():
                                             if sims:
-                                                log_dict[f"Probing_CosSim_Delta/Delta_{delta}_Mean"] = sum(sims) / len(sims)
+                                                log_dict[f"{prefix_delta}/Delta_{delta}_Mean"] = sum(sims) / len(sims)
                             finally:
                                 self.train() 
                             
