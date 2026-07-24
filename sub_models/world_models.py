@@ -959,6 +959,10 @@ class WorldModel(nn.Module):
                                             for j in range(i + 1, len(diver_counts)):
                                                 c1 = diver_counts[i]
                                                 c2 = diver_counts[j]
+                                                
+                                                if c1 == c2:
+                                                    continue
+                                                    
                                                 l1 = latents_dict[key_map[c1]]
                                                 l2 = latents_dict[key_map[c2]]
                                                 
