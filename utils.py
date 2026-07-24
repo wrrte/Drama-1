@@ -76,14 +76,20 @@ class WandbLogger:
             # Log images
             images = [wandb.Image(img) for img in value]  # Convert each image to a wandb.Image
             wandb.log({tag: images}, step=global_step)
+        elif "split_hist" in tag:
+            # Log separate histograms for each type as wandb.plot.histogram doesn't support 'split'
+            data, columns, value_col, split_col, title = value
+            split_idx = columns.index(split_col)
+            val_idx = columns.index(value_col)
+            
+            # Find unique splits (e.g., "Agent", "Demo")
+            unique_splits = set(row[split_idx] for row in data)
+            for split_val in unique_splits:
+                split_data = [row[val_idx] for row in data if row[split_idx] == split_val]
+                wandb.log({f"{tag}_{split_val}": wandb.Histogram(split_data)}, step=global_step)
         elif "hist" in tag:
             # Log histogram
             wandb.log({tag: wandb.Histogram(value)}, step=global_step)
-        elif "split_hist" in tag:
-            # Log split histogram
-            data, columns, value_col, split_col, title = value
-            table = wandb.Table(data=data, columns=columns)
-            wandb.log({tag: wandb.plot.histogram(table, value_col, title=title, split=split_col)}, step=global_step)
         elif "bar" in tag:
             # Log bar chart
             data, columns, x, y, title = value
