@@ -47,6 +47,9 @@ class ReplayBuffer():
         self.alpha = config.JointTrainAgent.Alpha
         self.beta = config.JointTrainAgent.Beta
         self.batch_scale_factor = config.JointTrainAgent.ImagineBatchSize / config.JointTrainAgent.BatchSize
+        
+        self.world_model_demo_ratio = getattr(config.Demonstration, 'WorldModelDemoRatio', 0.25) if hasattr(config, 'Demonstration') else 0.25
+        self.agent_demo_ratio = getattr(config.Demonstration, 'AgentDemoRatio', 0.0) if hasattr(config, 'Demonstration') else 0.0
 
     def ready(self, model_name='world_model'):
         return self.length  > self.world_model_warmup_length if model_name == 'world_model' else self.length  > self.behaviour_warmup_length
@@ -63,11 +66,54 @@ class ReplayBuffer():
                 score = counts - self.alpha * imagine_counts - self.beta * linear_penalty
                 score = score / self.imagination_tau
                 probabilities = torch.softmax(score, dim=0)
-                start_indexes = torch.multinomial(probabilities, batch_size, replacement=False)
             else:
                 logits = -counts / self.tau
                 probabilities = torch.exp(logits) / torch.sum(torch.exp(logits))
-                start_indexes = torch.multinomial(probabilities, batch_size, replacement=False)
+
+            # 혼합 배치 샘플링
+            valid_length = len(probabilities)
+            demo_size = getattr(self, 'protect_size', 0)
+            demo_valid_size = demo_size - batch_length + 1 if demo_size >= batch_length else 0
+
+            if demo_valid_size > 0 and valid_length > demo_valid_size:
+                demo_prob_mass = probabilities[:demo_valid_size].sum().item()
+                if imagine:
+                    if self.agent_demo_ratio == 0.0:
+                        target_demo_ratio = demo_prob_mass
+                    else:
+                        target_demo_ratio = self.agent_demo_ratio
+                else:
+                    target_demo_ratio = max(self.world_model_demo_ratio, demo_prob_mass)
+                
+                num_demo_samples = int(batch_size * target_demo_ratio)
+                num_agent_samples = batch_size - num_demo_samples
+                
+                if num_demo_samples > 0:
+                    demo_probs = probabilities[:demo_valid_size]
+                    demo_sum = demo_probs.sum()
+                    if demo_sum <= 1e-8:
+                        prob_demo = torch.ones_like(demo_probs) / demo_valid_size
+                    else:
+                        prob_demo = demo_probs / demo_sum
+                    demo_indexes = torch.multinomial(prob_demo, num_demo_samples, replacement=True)
+                else:
+                    demo_indexes = torch.empty(0, dtype=torch.long, device=self.device)
+                    
+                if num_agent_samples > 0:
+                    agent_probs = probabilities[demo_valid_size:]
+                    agent_sum = agent_probs.sum()
+                    if agent_sum <= 1e-8:
+                        prob_agent = torch.ones_like(agent_probs) / agent_probs.numel()
+                    else:
+                        prob_agent = agent_probs / agent_sum
+                    agent_indexes = torch.multinomial(prob_agent, num_agent_samples, replacement=True) + demo_valid_size
+                else:
+                    agent_indexes = torch.empty(0, dtype=torch.long, device=self.device)
+                    
+                start_indexes = torch.cat([demo_indexes, agent_indexes])
+                start_indexes = start_indexes[torch.randperm(batch_size, device=self.device)]
+            else:
+                start_indexes = torch.multinomial(probabilities, batch_size, replacement=True)
 
             if not imagine:
                 self.sampled_counter[start_indexes] += 1
@@ -104,7 +150,49 @@ class ReplayBuffer():
                 exp_score = np.exp(score - np.max(score))
                 probabilities = exp_score / np.sum(exp_score)
 
-                start_indexes = np.random.choice(len(probabilities), size=(batch_size,), replace=False, p=probabilities)
+                valid_length = len(probabilities)
+                demo_size = getattr(self, 'protect_size', 0)
+                demo_valid_size = demo_size - batch_length + 1 if demo_size >= batch_length else 0
+
+                if demo_valid_size > 0 and valid_length > demo_valid_size:
+                    if imagine:
+                        num_demo_samples = int(batch_size * self.agent_demo_ratio)
+                        num_agent_samples = batch_size - num_demo_samples
+                    else:
+                        demo_prob_mass = probabilities[:demo_valid_size].sum()
+                        target_demo_ratio = max(self.world_model_demo_ratio, demo_prob_mass)
+                        num_demo_samples = int(batch_size * target_demo_ratio)
+                        num_agent_samples = batch_size - num_demo_samples
+                    
+                    if num_demo_samples > 0:
+                        demo_probs = probabilities[:demo_valid_size]
+                        demo_sum = demo_probs.sum()
+                        if demo_sum <= 1e-8:
+                            prob_demo = np.ones_like(demo_probs) / demo_valid_size
+                        else:
+                            prob_demo = demo_probs / demo_sum
+                        replace_demo = num_demo_samples > demo_valid_size
+                        demo_indexes = np.random.choice(demo_valid_size, size=num_demo_samples, replace=replace_demo, p=prob_demo)
+                    else:
+                        demo_indexes = np.array([], dtype=np.int64)
+                        
+                    if num_agent_samples > 0:
+                        agent_probs = probabilities[demo_valid_size:]
+                        agent_sum = agent_probs.sum()
+                        if agent_sum <= 1e-8:
+                            prob_agent = np.ones_like(agent_probs) / len(agent_probs)
+                        else:
+                            prob_agent = agent_probs / agent_sum
+                        replace_agent = num_agent_samples > len(prob_agent)
+                        agent_indexes = np.random.choice(len(prob_agent), size=num_agent_samples, replace=replace_agent, p=prob_agent) + demo_valid_size
+                    else:
+                        agent_indexes = np.array([], dtype=np.int64)
+                        
+                    start_indexes = np.concatenate([demo_indexes, agent_indexes])
+                    np.random.shuffle(start_indexes)
+                else:
+                    replace_all = batch_size > len(probabilities)
+                    start_indexes = np.random.choice(len(probabilities), size=(batch_size,), replace=replace_all, p=probabilities)
 
                 if not imagine:
                     self.sampled_counter[start_indexes] += 1

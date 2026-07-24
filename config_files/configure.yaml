@@ -16,6 +16,30 @@ Evaluate:
    DuringTraining: True
    EverySteps: 2000
 
+Demonstration:
+  Enable: True
+  SkipPretrain: True
+  Directory: "demonstrations"
+  MaxFiles: 1
+  StrictActionCheck: True
+
+  WorldModelDemoRatio: 0.25
+
+  AgentDemoRatio: 0.0
+  AgentDemoRatioStartStep: 10000
+  AgentDemoRatioPeakStep: 20000
+  AgentDemoRatioPeak: 0.5
+  AgentDemoRatioEndStep: 100000
+  AgentDemoRatioEnd: 0.1
+
+  DemoRatioDecayScoreMultiplier: 0.9
+  DemoRatioDecayRate: 0.9
+  DemoRatioDecayThreshold: 0.05
+
+  BCWeightDecayRate: 0.65
+  BCWeightDecayThreshold: 0.1
+
+
 JointTrainAgent:
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k
   BufferMaxLength: 100000

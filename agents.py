@@ -106,6 +106,9 @@ class ActorCriticAgent(nn.Module):
         self.entropy_coef = conf.Models.Agent.AC.EntropyCoef
         self.use_amp = conf.BasicSettings.Use_amp
         self.max_grad_norm=conf.Models.Agent.AC.Max_grad_norm
+        
+        self.bc_weight = getattr(conf.Demonstration, 'BCWeight', 1.0) if hasattr(conf, 'Demonstration') else 1.0
+        self.max_grad_norm=conf.Models.Agent.AC.Max_grad_norm
         self.tensor_dtype = torch.bfloat16 if self.use_amp else torch.float32
         self.action_dim = action_dim
         self.unimix_ratio = conf.Models.Agent.Unimix_ratio
@@ -247,7 +250,7 @@ class ActorCriticAgent(nn.Module):
         action, _ = self.sample(latent, greedy)
         return action.detach().cpu().squeeze(-1).numpy()
     @profile
-    def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
+    def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step, demo_mask=None, performance_decay_factor=1.0, bc_weight_decay_factor=1.0):
         '''
         Update policy and value model
         '''
@@ -274,6 +277,18 @@ class ActorCriticAgent(nn.Module):
             norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # max(1, S) in the paper
             norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
             policy_loss = -(log_prob * norm_advantage.detach()).mean()
+
+            bc_loss = torch.tensor(0.0, device=reward.device)
+            if demo_mask is not None and demo_mask.any():
+                demo_mask_expand = demo_mask.unsqueeze(1).expand(-1, action.shape[1])
+                demo_logits = logits[:, :-1][demo_mask_expand]
+                demo_actions = action[demo_mask_expand]
+                if demo_actions.numel() > 0:
+                    bc_loss_sum = F.cross_entropy(demo_logits.reshape(-1, self.action_dim), demo_actions.reshape(-1).long(), reduction='sum')
+                    total_samples = action.numel()
+                    bc_loss = bc_loss_sum / total_samples
+                
+                policy_loss = policy_loss + self.bc_weight * bc_weight_decay_factor * bc_loss
 
             entropy_loss = entropy.mean()
 
@@ -322,7 +337,7 @@ class ActorCriticAgent(nn.Module):
 
 
 class PPOAgent(nn.Module):
-    def __init__(self, conf, action_dim, device):
+    def __init__(self, conf, action_dim, device, is_discrete=True):
         super().__init__()
         feat_dim=conf.Models.WorldModel.CategoricalDim*conf.Models.WorldModel.ClassDim+conf.Models.WorldModel.HiddenStateDim
         num_layers=conf.Models.Agent.PPO.NumLayers
@@ -330,15 +345,16 @@ class PPOAgent(nn.Module):
         critic_hidden_dim=conf.Models.Agent.PPO.Critic.HiddenUnits      
         self.gamma = conf.Models.Agent.PPO.Gamma
         self.lambd = conf.Models.Agent.PPO.Lambda
-        self.entropy_coef = conf.Models.Agent.PPO.EntropyCoef
         self.eps_clip=conf.Models.Agent.PPO.EpsilonClip
         self.K_epochs=conf.Models.Agent.PPO.K_epochs
         
         self.minibatch_size=conf.Models.Agent.PPO.Minibatch
         self.c1=conf.Models.Agent.PPO.CriticCoef
-        self.c2=conf.Models.Agent.PPO.EntropyCoef
-        self.kl_threshold=conf.Models.Agent.PPO.KL_threshold
-        self.max_grad_norm=conf.Models.Agent.PPO.Max_grad_norm
+        self.entropy_coef = conf.Models.Agent.PPO.EntropyCoef
+        self.kl_threshold = conf.Models.Agent.PPO.KL_threshold
+        self.max_grad_norm = conf.Models.Agent.PPO.Max_grad_norm
+        
+        self.bc_weight = getattr(conf.Demonstration, 'BCWeight', 1.0) if hasattr(conf, 'Demonstration') else 1.0
         self.use_amp = conf.BasicSettings.Use_amp
         self.tensor_dtype = torch.bfloat16 if self.use_amp else torch.float32
         self.action_dim = action_dim
@@ -462,7 +478,7 @@ class PPOAgent(nn.Module):
             return action.detach().cpu().numpy()
 
     @profile
-    def comput_loss(self, latent, action, logp_old, advs, rtgs, slow_return):
+    def comput_loss(self, latent, action, logp_old, advs, rtgs, slow_return, demo_mask=None, performance_decay_factor=1.0, bc_weight_decay_factor=1.0):
 
         logp, raw_values, entropy = self.get_logp_val_entr(latent, action, longer_value=False)
 
@@ -473,6 +489,14 @@ class PPOAgent(nn.Module):
         clip_advs = torch.clamp(ratio, 1-self.eps_clip, 1+self.eps_clip) * advs
         # Torch Adam implement tation mius the gradient, to plus the gradient, we need make the loss negative
         actor_loss = -(torch.min(ratio*advs.detach(), clip_advs.detach())).mean()
+
+        bc_loss = torch.tensor(0.0, device=latent.device)
+        if demo_mask is not None and demo_mask.any():
+            demo_logits = self.actor(latent[demo_mask])
+            demo_actions = action[demo_mask]
+            if demo_actions.numel() > 0:
+                bc_loss = F.cross_entropy(demo_logits.reshape(-1, self.action_dim), demo_actions.reshape(-1).long())
+            actor_loss = actor_loss + self.bc_weight * bc_weight_decay_factor * bc_loss
 
         # values = values.flatten() # I used squeeze before, maybe a mistake
         slow_critic_loss = self.symlog_twohot_loss(raw_values, slow_return.detach())
@@ -534,7 +558,7 @@ class PPOAgent(nn.Module):
 
 
     @profile
-    def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
+    def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step, demo_mask=None, performance_decay_factor=1.0, bc_weight_decay_factor=1.0):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             feat_dim = latent.shape[-1]
@@ -557,6 +581,11 @@ class PPOAgent(nn.Module):
                 flatten_old_logp = old_logp.reshape(-1).detach()              # (B*T,)
 
             batch_size = flatten_latent.shape[0]
+
+            if demo_mask is not None:
+                flatten_demo_mask = demo_mask.unsqueeze(1).expand(-1, action.shape[1]).reshape(-1)
+            else:
+                flatten_demo_mask = None
 
             entropy_loss_list = []
             actor_loss_list = []
@@ -595,6 +624,7 @@ class PPOAgent(nn.Module):
                     end = start + self.minibatch_size
 
                     minibatch_inds = inds[start:end]
+                    minibatch_demo_mask = flatten_demo_mask[minibatch_inds] if flatten_demo_mask is not None else None
                 
                     actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx = self.comput_loss(
                         flatten_latent[minibatch_inds], 
@@ -602,7 +632,10 @@ class PPOAgent(nn.Module):
                         flatten_old_logp[minibatch_inds], 
                         flatten_advantages[minibatch_inds], 
                         flatten_returns[minibatch_inds],
-                        flatten_slow_return[minibatch_inds]
+                        flatten_slow_return[minibatch_inds],
+                        minibatch_demo_mask,
+                        performance_decay_factor,
+                        bc_weight_decay_factor
                     )
                     
                     total_loss = actor_loss + self.c1 * critic_loss + slow_critic_loss - self.c2 * entropy_loss
