@@ -966,7 +966,10 @@ class MacroLoss(nn.Module):
 
         if self.diff_type == "aux_value":
             past_aux_pred = self.aux_value_net(past_latent_full).squeeze(-1)
-            metric_diff = torch.abs(curr_metric.detach() - past_aux_pred.detach())
+            # [수정] SymLog → Linear 변환 후 차이 계산 (SymLog 압축으로 인한 후반부 가중치 소실 방지)
+            curr_linear = symexp(curr_metric.detach())
+            past_linear = symexp(past_aux_pred.detach())
+            metric_diff = torch.abs(curr_linear - past_linear)
             sigma = torch.sqrt(self.aux_value_var + 1e-8)
         elif self.diff_type == "td_error":
             past_metric = torch.tensor(past_metric_list, device=latent.device, dtype=curr_metric.dtype)
@@ -1007,7 +1010,8 @@ class MacroLoss(nn.Module):
         else:
             # Margin Style: 기존의 무조건적 척력(Repulsion) 기반
             with torch.no_grad():
-                current_max = torch.max(torch.abs(curr_metric.detach()))
+                # [수정] running_max_metric도 Linear 스케일로 관리 (metric_diff와 스케일 일치)
+                current_max = torch.max(torch.abs(symexp(curr_metric.detach())))
                 self.running_max_metric.copy_(torch.max(self.running_max_metric, current_max.float()))
                 
             metric_diff_scaled = metric_diff / self.running_max_metric
