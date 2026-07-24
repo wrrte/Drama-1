@@ -217,8 +217,6 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
     epoch_representation_loss_list = []
     epoch_representation_real_kl_div_list = []
     epoch_total_loss_list = []
-    epoch_contrastive_loss_list = []
-    epoch_contrastive_acc_list = []
     epoch_macro_loss_list = []
     epoch_macro_distill_loss_list = []
     epoch_macro_contrastive_loss_list = []
@@ -229,8 +227,7 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
             reconstruction_loss, reward_loss, termination_loss,
             dynamics_loss, dynamics_real_kl_div, representation_loss,
             representation_real_kl_div, total_loss,
-            contrastive_loss, contrastive_acc, macro_loss,
-            macro_distill_loss, macro_contrastive_loss
+            macro_loss, macro_distill_loss, macro_contrastive_loss
         ) = world_model.update(
             obs, action, reward, termination, 
             global_step=global_step, epoch_step=e, logger=logger,
@@ -245,8 +242,6 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
         epoch_representation_loss_list.append(representation_loss)
         epoch_representation_real_kl_div_list.append(representation_real_kl_div)
         epoch_total_loss_list.append(total_loss)
-        epoch_contrastive_loss_list.append(contrastive_loss)
-        epoch_contrastive_acc_list.append(contrastive_acc)
         epoch_macro_loss_list.append(macro_loss)
         epoch_macro_distill_loss_list.append(macro_distill_loss)
         epoch_macro_contrastive_loss_list.append(macro_contrastive_loss)
@@ -260,8 +255,6 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
         logger.log("WorldModel/representation_loss", np.mean(epoch_representation_loss_list), global_step=global_step)
         logger.log("WorldModel/representation_real_kl_div", np.mean(epoch_representation_real_kl_div_list), global_step=global_step)
         logger.log("WorldModel/total_loss", np.mean(epoch_total_loss_list), global_step=global_step)
-        logger.log("WorldModel/contrastive_loss", np.mean(epoch_contrastive_loss_list), global_step=global_step)
-        logger.log("WorldModel/contrastive_acc", np.mean(epoch_contrastive_acc_list), global_step=global_step)
         logger.log("WorldModel/macro_loss", np.mean(epoch_macro_loss_list), global_step=global_step)
         logger.log("WorldModel/macro_distill_loss", np.mean(epoch_macro_distill_loss_list), global_step=global_step)
         logger.log("WorldModel/macro_contrastive_loss", np.mean(epoch_macro_contrastive_loss_list), global_step=global_step)

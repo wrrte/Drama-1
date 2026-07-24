@@ -976,8 +976,6 @@ class WorldModel(nn.Module):
             representation_loss.item(),
             representation_real_kl_div.item(),
             total_loss.item(),
-            0.0, # contrastive_loss
-            0.0, # contrastive_acc
             macro_loss.item() if hasattr(macro_loss, 'item') else macro_loss,
             m_distill_loss.item() if hasattr(m_distill_loss, 'item') else m_distill_loss,
             m_contrastive_loss.item() if hasattr(m_contrastive_loss, 'item') else m_contrastive_loss,

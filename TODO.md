@@ -9,10 +9,6 @@ graduate_research/sub_models/macro_loss.py 및 graduate_research/agents.py: 설�
 
 
 
-
-억지로 0 값을 wandb에 고정 출력하게 해둔 부분 그냥 기록 안 하게 수정하기
-
-
 # Sonnet에게 논문 보여주고 의도대로 잘 작성되었는지 검토해달라고 하기.
 
 나도 코드 쭈욱 읽어보고 의도와 다른 부분 없는지 검토
