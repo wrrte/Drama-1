@@ -17,7 +17,7 @@ Evaluate:
    EverySteps: 2000
 
 Demonstration:
-  Enable: True
+  Enable: False
   SkipPretrain: True
   Directory: "demonstrations"
   MaxFiles: 1
@@ -116,12 +116,17 @@ Models:
         Enable: true
         Probability: 0.2
         Target: critic
-      DynWeighting:
-        Enable: true
-        Scale: 50.0           # α: value diff에 곱해지는 스케일
-        MaxWeight: 100.0      # 가중치 상한 (gradient 폭발 방지)
-        ApplyToRecon: true    # reconstruction loss에 적용
-        ApplyToReward: true   # reward loss에 적용
+    AuxValueNet:
+      Enable: false
+      AuxGamma: 0.985
+      AuxLam: 0.95
+    DynWeighting:
+      Enable: false
+      UseAuxValueNet: false  # true면 별도의 aux_value_net 학습(오버헤드 발생), false면 에이전트의 critic(values_sq) 재사용
+      Scale: 20.0           # α: value diff에 곱해지는 스케일 (z-score 기준이므로 25~50 적당)
+      MaxWeight: 100.0      # 가중치 상한 (gradient 폭발 방지)
+      ApplyToRecon: true    # reconstruction loss에 적용
+      ApplyToReward: true   # reward loss에 적용
     Adam:
       LearningRate: 1.0e-4
     Laprop:
@@ -165,6 +170,7 @@ Models:
     Policy: AC # AC or PPO
     Unimix_ratio: 0
     AC:
+      EnableCriticProbe: false
       NumLayers: 3    
       Gamma: 0.985
       Lambda: 0.95

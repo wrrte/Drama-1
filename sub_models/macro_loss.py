@@ -49,9 +49,10 @@ class FastHashBucket:
         return len(self.items)
 
 class MacroLoss(nn.Module):
-    def __init__(self, latent_dim, config, full_latent_dim=None, buffer_max_length=1000000):
+    def __init__(self, latent_dim, config, dyn_config=None, full_latent_dim=None, buffer_max_length=1000000):
         super().__init__()
         cfg = config or {}
+        dyn_cfg = dyn_config or {}
         self.enabled = bool(cfg.get("Enable", False))
         
         self.aux_gamma = cfg.get("AuxGamma", None)
@@ -63,31 +64,7 @@ class MacroLoss(nn.Module):
         if self.diff_type not in ["reward", "td_error", "value", "aux_value"]:
             raise ValueError(f"DiffType must be 'reward', 'td_error', 'value', or 'aux_value', got {self.diff_type}")
             
-        aux_dim = full_latent_dim if full_latent_dim is not None else latent_dim
-        
-        dropout_cfg = cfg.get("LatentDropout", {})
-        use_dropout = bool(dropout_cfg.get("Enable", False))
-        dropout_p = float(dropout_cfg.get("Probability", 0.2))
-        dropout_target = str(dropout_cfg.get("Target", "aux_value_net")).lower()
-        
-        layers = []
-        if use_dropout and dropout_target in ["aux_value_net", "both"]:
-            layers.append(nn.Dropout(p=dropout_p))
-            
-        layers.extend([
-            nn.Linear(aux_dim, 512),
-            nn.LayerNorm(512),
-            nn.SiLU(),
-            nn.Linear(512, 1)
-        ])
-        
-        self.aux_value_net = nn.Sequential(*layers)
-        
-        # [추가] 고주파 노이즈 완화를 위한 EMA 타겟 네트워크 (Slow Aux Value Net)
-        import copy
-        self.slow_aux_value_net = copy.deepcopy(self.aux_value_net)
-        for param in self.slow_aux_value_net.parameters():
-            param.requires_grad = False
+        # AuxValueNet has been extracted to WorldModel.
         
         self.sigma_threshold = float(cfg.get("SigmaThreshold", 2.0))
         
@@ -171,22 +148,7 @@ class MacroLoss(nn.Module):
             self.register_buffer("td_error_var", torch.tensor(1.0, dtype=torch.float64))
             self.register_buffer("td_error_count", torch.tensor(1e-4, dtype=torch.float64))
             
-        if self.trigger_type in ["aux_value", "value", "aux_value_diff"]:
-            self.register_buffer("aux_value_mean", torch.tensor(0.0, dtype=torch.float64))
-            self.register_buffer("aux_value_var", torch.tensor(1.0, dtype=torch.float64))
-            self.register_buffer("aux_value_count", torch.tensor(1e-4, dtype=torch.float64))
-
-        self.register_buffer("running_max_metric", torch.tensor(1.0, dtype=torch.float32), persistent=False)
-
-        # --- [추가] Dynamics Weighting 설정 ---
-        dyn_cfg = cfg.get("DynWeighting", {})
-        self.dyn_weighting_enable = bool(dyn_cfg.get("Enable", False))
-        self.dyn_weighting_scale = float(dyn_cfg.get("Scale", 50.0))
-        self.dyn_weighting_max = float(dyn_cfg.get("MaxWeight", 100.0))
-        self.dyn_weighting_apply_recon = bool(dyn_cfg.get("ApplyToRecon", True))
-        self.dyn_weighting_apply_reward = bool(dyn_cfg.get("ApplyToReward", True))
-        self.register_buffer("dyn_running_max_value", torch.tensor(1e-8, dtype=torch.float32), persistent=True)
-        # ------------------------------------------
+        # Dynamics Weighting has been extracted to WorldModel.
 
     def _update_welford(self, td_error, valid_mask):
         valid_td = td_error[valid_mask].to(torch.float64)
@@ -225,71 +187,6 @@ class MacroLoss(nn.Module):
     def update_slow_target(self, decay=0.98):
         for slow_param, param in zip(self.slow_aux_value_net.parameters(), self.aux_value_net.parameters()):
             slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
-
-    def _update_aux_welford(self, aux_value, valid_mask):
-        valid_aux = aux_value[valid_mask].to(torch.float64)
-        
-        if valid_aux.numel() == 0:
-            return self.aux_value_mean.to(torch.float32), self.aux_value_var.to(torch.float32)
-
-        batch_mean = torch.mean(valid_aux)
-        batch_var = torch.var(valid_aux, unbiased=False)
-        batch_count = torch.tensor(valid_aux.numel(), dtype=torch.float64, device=aux_value.device)
-
-        tot_count = self.aux_value_count + batch_count
-        self.aux_value_count.copy_(tot_count)
-
-        # RL의 Non-stationary 특성을 고려한 EMA 업데이트
-        # 초기에는 Welford(누적 평균)로 작동하여 안정성을 확보하고,
-        # 데이터가 충분히 쌓이면(alpha <= 1-decay) EMA로 부드럽게 전환됩니다.
-        decay = 0.999
-        alpha = torch.clamp(batch_count / tot_count, min=1.0 - decay, max=1.0)
-
-        old_mean = self.aux_value_mean.clone()
-        new_mean = (1.0 - alpha) * old_mean + alpha * batch_mean
-        
-        # Variance EMA 업데이트 수식
-        new_var = (1.0 - alpha) * self.aux_value_var + \
-                  alpha * batch_var + \
-                  alpha * (1.0 - alpha) * ((batch_mean - old_mean) ** 2)
-
-        self.aux_value_mean.copy_(new_mean)
-        self.aux_value_var.copy_(new_var)
-
-        return self.aux_value_mean.to(torch.float32), self.aux_value_var.to(torch.float32)
-
-    def compute_dynamics_weights(self, latent_full):
-        """Value-diff에 비례하는 dynamics loss 가중치를 계산합니다.
-        
-        Returns:
-            weights: [B, L] shape tensor, 각 프레임의 dynamics loss 가중치.
-                     value 변화가 없는 프레임은 1.0, 급변하는 프레임은 1+scale*diff.
-                     None if dyn_weighting is disabled.
-        """
-        if not self.dyn_weighting_enable:
-            return None
-        
-        with torch.no_grad():
-            aux_val_symlog = self.aux_value_net(latent_full.detach()).squeeze(-1)  # [B, L]
-            aux_val_linear = symexp(aux_val_symlog)
-            
-            # 인접 프레임 간 value 절대 차이
-            val_diff = torch.zeros_like(aux_val_linear)
-            val_diff[:, 1:] = torch.abs(aux_val_linear[:, 1:] - aux_val_linear[:, :-1])
-            
-            # Running max로 정규화 (EMA decay 적용)
-            current_max = torch.max(torch.abs(aux_val_linear))
-            self.dyn_running_max_value.copy_(
-                torch.max(self.dyn_running_max_value * 0.999, current_max)
-            )
-            
-            val_diff_norm = val_diff / self.dyn_running_max_value.clamp(min=1e-8)
-            
-            # 가중치 계산: 1 + scale * normalized_diff
-            weights = 1.0 + self.dyn_weighting_scale * val_diff_norm
-            weights = weights.clamp(max=self.dyn_weighting_max)
-        
-        return weights
 
     def _hash_keys(self, latent):
         if latent.numel() == 0:
@@ -553,12 +450,15 @@ class MacroLoss(nn.Module):
         # 구체적인 분포(히스토그램/바)는 evaluation 시에 log_detailed_distribution 메서드를 통해 따로 로깅합니다.
         # -----------------------------
 
-        if not self.enabled:
+        if not self.enabled and not (self.dyn_weighting_enable and self.dyn_use_aux_value_net):
             return obs.new_tensor(0.0), obs.new_tensor(0.0), obs.new_tensor(0.0), None, None, None
         
         if global_step is not None and self.disable_after_step > 0:
             if global_step >= self.disable_after_step:
                 self.enabled = False
+                
+        if not self.enabled and not (self.dyn_weighting_enable and self.dyn_use_aux_value_net):
+            return obs.new_tensor(0.0), obs.new_tensor(0.0), obs.new_tensor(0.0), None, None, None
         # -----------------------------------------------------------------
 
         if obs.numel() == 0:
@@ -585,6 +485,12 @@ class MacroLoss(nn.Module):
 
         latent_for_aux = latent_full.detach() if latent_full is not None else latent.detach()
         aux_value_all = self.aux_value_net(latent_for_aux).squeeze(-1)
+        aux_val_linear_for_stats = symexp(aux_value_all.detach()).to(torch.float32)
+        
+        # Welford 통계 업데이트 (DynWeighting과 MacroLoss 트리거 모두에서 필요하므로 공통으로 1회만 수행)
+        # UseAuxValueNet이 False인 경우에는 compute_dynamics_weights에서 이미 업데이트했으므로 스킵 가능하지만,
+        # self.enabled가 True일 수 있으므로 여기서 업데이트 유지. (어차피 UseAuxValueNet이 False면서 enabled가 False면 위에서 early return 됨)
+        self._update_aux_welford(aux_val_linear_for_stats, align_mask)
         
         if value is not None:
             # --- [수정] 대안 A+: 오프라인 보상 기반 TD(lambda) 타겟 계산 ---
@@ -629,8 +535,9 @@ class MacroLoss(nn.Module):
         else:
             distill_loss = latent.new_tensor(0.0)
 
+        # MacroLoss가 비활성화되어 있다면, 대비 학습(Contrastive) 등 나머지 로직은 스킵
         if not self.enabled:
-            return distill_loss, distill_loss, latent.new_tensor(0.0), None, None, None
+            return distill_loss.new_tensor(0.0), distill_loss, latent.new_tensor(0.0), None, None, None
 
         if self.trigger_type == "td_error":
             if td_error is None:
@@ -665,8 +572,9 @@ class MacroLoss(nn.Module):
                     current_max_aux = torch.max(torch.abs(valid_aux))
                     self.running_max_trigger_metric.copy_(torch.max(self.running_max_trigger_metric * self.max_relative_threshold_decay, current_max_aux))
 
-            # --- [수정된 부분] 글로벌 Welford 통계를 업데이트하고 가져옵니다 ---
-            aux_mean, aux_var = self._update_aux_welford(aux_val_linear, align_mask)
+            # 글로벌 Welford 통계 가져오기 (공통 영역에서 이미 업데이트됨)
+            aux_mean = self.aux_value_mean.to(torch.float32)
+            aux_var = self.aux_value_var.to(torch.float32)
             aux_std = torch.sqrt(aux_var + 1e-8)
             trigger_mask_sigma = (torch.abs(aux_val_linear - aux_mean) >= self.sigma_threshold * aux_std) & align_mask
             self.debug_metrics['sigma_trigger_count'] = trigger_mask_sigma.sum().item()
@@ -682,8 +590,7 @@ class MacroLoss(nn.Module):
         elif self.trigger_type == "aux_value_diff":
             aux_val_linear = symexp(aux_value_all.detach()).to(torch.float32)
             
-            # aux_value의 Welford 통계를 정상적으로 업데이트 (나중에 contrastive loss에서 variance 사용)
-            self._update_aux_welford(aux_val_linear, align_mask)
+            # Welford 통계는 공통 영역에서 이미 업데이트됨
 
             val_diff = torch.zeros_like(aux_val_linear)
             val_diff[..., 1:] = torch.abs(aux_val_linear[..., 1:] - aux_val_linear[..., :-1])

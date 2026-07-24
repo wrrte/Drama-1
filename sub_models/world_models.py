@@ -229,6 +229,58 @@ class TerminationHead(nn.Module):
         termination = termination.squeeze(-1)  # remove last 1 dim
         return termination
 
+class AuxValueModule(nn.Module):
+    def __init__(self, latent_dim, dropout_p=0.2):
+        super().__init__()
+        layers = [
+            nn.Dropout(p=dropout_p),
+            nn.Linear(latent_dim, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(),
+            nn.Linear(512, 1)
+        ]
+        self.net = nn.Sequential(*layers)
+        
+        import copy
+        self.slow_net = copy.deepcopy(self.net)
+        for param in self.slow_net.parameters():
+            param.requires_grad = False
+            
+        self.register_buffer("aux_value_mean", torch.tensor(0.0, dtype=torch.float64))
+        self.register_buffer("aux_value_var", torch.tensor(1.0, dtype=torch.float64))
+        self.register_buffer("aux_value_count", torch.tensor(1e-4, dtype=torch.float64))
+
+    @torch.no_grad()
+    def update_slow_target(self, decay=0.98):
+        for slow_param, param in zip(self.slow_net.parameters(), self.net.parameters()):
+            slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
+
+    def update_welford(self, aux_value, valid_mask):
+        valid_aux = aux_value[valid_mask].to(torch.float64)
+        if valid_aux.numel() == 0:
+            return self.aux_value_mean.to(torch.float32), self.aux_value_var.to(torch.float32)
+
+        batch_mean = torch.mean(valid_aux)
+        batch_var = torch.var(valid_aux, unbiased=False)
+        batch_count = torch.tensor(valid_aux.numel(), dtype=torch.float64, device=aux_value.device)
+
+        tot_count = self.aux_value_count + batch_count
+        self.aux_value_count.copy_(tot_count)
+
+        decay = 0.999
+        alpha = torch.clamp(batch_count / tot_count, min=1.0 - decay, max=1.0)
+        old_mean = self.aux_value_mean.clone()
+        new_mean = (1.0 - alpha) * old_mean + alpha * batch_mean
+        new_var = (1.0 - alpha) * self.aux_value_var + alpha * batch_var + alpha * (1.0 - alpha) * ((batch_mean - old_mean) ** 2)
+
+        self.aux_value_mean.copy_(new_mean)
+        self.aux_value_var.copy_(new_var)
+        return self.aux_value_mean.to(torch.float32), self.aux_value_var.to(torch.float32)
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class MSELoss(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -377,6 +429,14 @@ class WorldModel(nn.Module):
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
         self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
         self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
+        
+        self.aux_cfg = getattr(config.Models.WorldModel, 'AuxValueNet', {})
+        self.aux_enable = getattr(self.aux_cfg, 'Enable', False)
+        if self.aux_enable:
+            self.aux_value_module = AuxValueModule(self.stoch_flattened_dim).to(device)
+        else:
+            self.aux_value_module = None
+            
         if config.Models.WorldModel.Optimiser == 'Laprop':
             self.optimizer = LaProp(self.parameters(), lr=config.Models.WorldModel.Laprop.LearningRate, eps=config.Models.WorldModel.Laprop.Epsilon, weight_decay=config.Models.WorldModel.Weight_decay)
         elif config.Models.WorldModel.Optimiser == 'Adam':
@@ -390,13 +450,18 @@ class WorldModel(nn.Module):
         
         macro_cfg = getattr(config.Models.WorldModel, 'MacroLoss', {})
         macro_enable = getattr(macro_cfg, 'Enable', False)
-        dyn_weighting_enable = bool(getattr(macro_cfg, 'DynWeighting', {}).get('Enable', False)) if hasattr(macro_cfg, 'DynWeighting') else False
-        # MacroLoss 모듈은 contrastive loss가 켜져 있거나 dynamics weighting이 켜져 있으면 생성
-        if MacroLoss is not None and (macro_enable or dyn_weighting_enable):
+        
+        dyn_cfg = getattr(config.Models.WorldModel, 'DynWeighting', {})
+        self.dyn_cfg = dyn_cfg
+        dyn_weighting_enable = getattr(dyn_cfg, 'Enable', False)
+        
+        # MacroLoss 모듈은 contrastive loss가 켜져 있을 때만 생성
+        if MacroLoss is not None and macro_enable:
             buffer_max_length = getattr(config.BasicSettings, 'BufferMaxLength', 100000)
             self.macro_loss = MacroLoss(
                 latent_dim=self.stoch_flattened_dim,
                 config=macro_cfg,
+                dyn_config=dyn_cfg,
                 full_latent_dim=self.stoch_flattened_dim,
                 buffer_max_length=buffer_max_length
             ).to(device)
@@ -417,6 +482,48 @@ class WorldModel(nn.Module):
             sample = self.stright_throught_gradient(post_logits, sample_mode=sample_mode)
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
+
+    def compute_dynamics_weights(self, latent_full, values_sq=None):
+        """Value-diff의 z-score에 비례하는 dynamics loss 가중치를 계산합니다."""
+        dyn_weighting_enable = bool(self.dyn_cfg.get("Enable", False))
+        if not dyn_weighting_enable:
+            return None
+            
+        dyn_use_aux_value_net = bool(self.dyn_cfg.get("UseAuxValueNet", True))
+        dyn_weighting_scale = float(self.dyn_cfg.get("Scale", 25.0))
+        dyn_weighting_max = float(self.dyn_cfg.get("MaxWeight", 100.0))
+        
+        from sub_models.functions_losses import symexp
+        with torch.no_grad():
+            if dyn_use_aux_value_net and self.aux_value_module is not None:
+                aux_val_symlog = self.aux_value_module(latent_full.detach()).squeeze(-1)
+                aux_val_linear = symexp(aux_val_symlog)
+            else:
+                if values_sq is None:
+                    raise ValueError("UseAuxValueNet is false but values_sq is not provided to compute_dynamics_weights")
+                aux_val_linear = symexp(values_sq.detach()).to(torch.float32)
+                align_mask = torch.ones_like(aux_val_linear, dtype=torch.bool)
+                if align_mask.dim() >= 2:
+                    align_mask[..., 0] = False
+                    align_mask[..., -1] = False
+                if self.aux_value_module is not None:
+                    self.aux_value_module.update_welford(aux_val_linear, align_mask)
+            
+            val_diff = torch.zeros_like(aux_val_linear)
+            val_diff[:, 1:] = torch.abs(aux_val_linear[:, 1:] - aux_val_linear[:, :-1])
+            
+            if self.aux_value_module is not None:
+                aux_std = torch.sqrt(self.aux_value_module.aux_value_var.to(torch.float32) + 1e-8)
+            else:
+                # Fallback if AuxValueModule is completely disabled but DynWeighting uses values_sq
+                aux_std = torch.std(val_diff) + 1e-8
+                
+            z_score = val_diff / aux_std
+            z_clamped = z_score.clamp(min=0.0)
+            weights = 1.0 + dyn_weighting_scale * z_clamped
+            weights = weights.clamp(max=dyn_weighting_max)
+        
+        return weights
 
     def encode_for_macro(self, obs):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -711,9 +818,61 @@ class WorldModel(nn.Module):
             termination_hat = self.termination_decoder(dist_feat)
 
             # --- Dynamics Weighting 계산 ---
-            dyn_weights = None
-            if self.macro_loss is not None:
-                dyn_weights = self.macro_loss.compute_dynamics_weights(flattened_sample)
+            dyn_weighting_enable = bool(self.dyn_cfg.get("Enable", False))
+            dyn_use_aux_value_net = bool(self.dyn_cfg.get("UseAuxValueNet", True))
+            
+            values_sq = None
+            if dyn_weighting_enable and (not dyn_use_aux_value_net or self.aux_value_module is None):
+                if agent is not None:
+                    with torch.no_grad():
+                        aligned_input = torch.cat([flattened_sample[:, 1:], dist_feat[:, :-1]], dim=-1)
+                        aligned_values = agent.value(aligned_input) 
+                        reward_sq = reward.squeeze(-1) if reward.dim() == 3 else reward
+                        values_sq = torch.zeros_like(reward_sq)
+                        values_sq[:, 1:] = aligned_values.squeeze(-1) if aligned_values.dim() == 3 else aligned_values
+
+            dyn_weights = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq)
+            
+            # AuxValueNet Distillation (if enabled)
+            m_distill_loss = torch.tensor(0.0, device=obs.device)
+            aux_val_linear_full = None
+            if self.aux_value_module is not None:
+                from sub_models.functions_losses import symexp, symlog
+                aux_val_symlog = self.aux_value_module(flattened_sample.detach()).squeeze(-1)
+                aux_val_linear_full = symexp(aux_val_symlog.detach()).to(torch.float32)
+                
+                with torch.no_grad():
+                    gamma = self.aux_cfg.get("AuxGamma", 0.985)
+                    lam = self.aux_cfg.get("AuxLam", 0.95)
+                    
+                    slow_aux_val_symlog = self.aux_value_module.slow_net(flattened_sample.detach()).squeeze(-1)
+                    slow_aux_val_linear = symexp(slow_aux_val_symlog.detach())
+                    
+                    if termination.dim() == 3:
+                        termination_sq = termination.squeeze(-1)
+                    else:
+                        termination_sq = termination
+                    inv_termination = (termination_sq * -1) + 1
+                        
+                    gamma_return = torch.zeros((batch_size, batch_length + 1), dtype=reward.dtype, device=reward.device)
+                    gamma_return[:, -1] = slow_aux_val_linear[:, -1]
+                    
+                    for t in reversed(range(batch_length)):
+                        next_val = slow_aux_val_linear[:, t+1] if t + 1 < batch_length else slow_aux_val_linear[:, t]
+                        gamma_return[:, t] = \
+                            reward[:, t] + \
+                            gamma * inv_termination[:, t] * (1 - lam) * next_val + \
+                            gamma * inv_termination[:, t] * lam * gamma_return[:, t+1]
+                                
+                    target_v_linear_full = gamma_return[:, :-1]
+                    sym_target_value = symlog(target_v_linear_full)
+                    
+                align_mask = torch.ones_like(reward, dtype=torch.bool)
+                if align_mask.dim() >= 2:
+                    align_mask[..., 0] = False
+                    align_mask[..., -1] = False
+                
+                m_distill_loss = self.mse_loss_func(aux_val_symlog[align_mask], sym_target_value[align_mask])
 
             # env loss
             if dyn_weights is not None:
@@ -721,12 +880,15 @@ class WorldModel(nn.Module):
                 recon_per_frame = self.mse_loss_func(obs_hat[:batch_size], obs[:batch_size], reduction='none')  # [B, L]
                 reward_per_frame = self.symlog_twohot_loss_func(reward_hat, reward, reduction='none')  # [B, L]
                 
-                if self.macro_loss.dyn_weighting_apply_recon:
+                dyn_apply_recon = bool(self.dyn_cfg.get("ApplyToRecon", True))
+                dyn_apply_reward = bool(self.dyn_cfg.get("ApplyToReward", True))
+                
+                if dyn_apply_recon:
                     reconstruction_loss = (recon_per_frame * dyn_weights).mean()
                 else:
                     reconstruction_loss = recon_per_frame.mean()
                     
-                if self.macro_loss.dyn_weighting_apply_reward:
+                if dyn_apply_reward:
                     reward_loss = (reward_per_frame * dyn_weights).mean()
                 else:
                     reward_loss = reward_per_frame.mean()
@@ -739,25 +901,17 @@ class WorldModel(nn.Module):
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
             
-            total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
+            total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss + m_distill_loss
 
-            macro_loss = torch.tensor(0.0)
-            m_distill_loss = torch.tensor(0.0)
-            m_contrastive_loss = torch.tensor(0.0)
+            macro_loss = torch.tensor(0.0, device=obs.device)
+            m_contrastive_loss = torch.tensor(0.0, device=obs.device)
 
             if self.macro_loss is not None:
-                # Calculate TD error or Aux value difference using agent
-                values_sq = None
-                if agent is not None:
-                    with torch.no_grad():
-                        aligned_input = torch.cat([flattened_sample[:, 1:], dist_feat[:, :-1]], dim=-1)
-                        aligned_values = agent.value(aligned_input) 
-                        reward_sq = reward.squeeze(-1) if reward.dim() == 3 else reward
-                        values_sq = torch.zeros_like(reward_sq)
-                        values_sq[:, 1:] = aligned_values.squeeze(-1) if aligned_values.dim() == 3 else aligned_values
-                
                 flattened_logits = rearrange(post_logits, "B L K C -> B L (K C)")
-                macro_loss, m_distill_loss, m_contrastive_loss, trigger_obs, t_mask, t_mask_orig = self.macro_loss(
+                # MacroLoss에는 이미 계산된 aux_val_linear_full 및 aux_std를 전달 (트리거용)
+                aux_std = torch.sqrt(self.aux_value_module.aux_value_var.to(torch.float32) + 1e-8) if self.aux_value_module is not None else None
+                
+                macro_loss, m_contrastive_loss, trigger_obs, t_mask, t_mask_orig = self.macro_loss(
                     obs=obs,
                     latent=flattened_sample,
                     logits=flattened_logits,
@@ -766,20 +920,22 @@ class WorldModel(nn.Module):
                     reward_mean=0.0,
                     reward_std=1.0,
                     value=values_sq, 
-                    aux_value=None,
+                    aux_value_linear=aux_val_linear_full,
+                    aux_std=aux_std,
                     termination=termination,
                     indexes=indexes,
                     replay_buffer=replay_buffer,
                     global_step=global_step,
-                    latent_full=flattened_sample,
-                    aux_gamma=self.macro_loss.aux_gamma,
-                    aux_lam=0.95
+                    latent_full=flattened_sample
                 )
                 total_loss = total_loss + macro_loss
-                if logger is not None:
+                
+            if logger is not None:
+                if self.macro_loss is not None:
                     logger.log("WorldModel/macro_loss", macro_loss.item(), global_step=global_step)
-                    logger.log("WorldModel/macro_distill_loss", m_distill_loss.item(), global_step=global_step)
                     logger.log("WorldModel/macro_contrastive_loss", m_contrastive_loss.item(), global_step=global_step)
+                if self.aux_value_module is not None:
+                    logger.log("WorldModel/aux_distill_loss", m_distill_loss.item(), global_step=global_step)
 
             # --- Dynamics Weighting wandb 로깅 ---
             if dyn_weights is not None and logger is not None:
@@ -797,8 +953,8 @@ class WorldModel(nn.Module):
         self.lr_scheduler.step()
         self.warmup_scheduler.dampen()
         
-        if self.macro_loss is not None:
-            self.macro_loss.update_slow_target(decay=0.98)
+        if self.aux_value_module is not None:
+            self.aux_value_module.update_slow_target(decay=0.98)
 
         if logger is not None and hasattr(self.macro_loss, 'debug_metrics'):
             for metric_name, metric_value in self.macro_loss.debug_metrics.items():
@@ -846,9 +1002,14 @@ class WorldModel(nn.Module):
             # ==========================================================
             import os
             
-            _diff_type = getattr(self.macro_loss, 'diff_type', 'reward')
-            _trigger_type = getattr(self.macro_loss, 'trigger_type', 'reward')
-            if _diff_type in ['aux_value', 'aux_value_diff'] or _trigger_type in ['aux_value', 'aux_value_diff']:
+            _diff_type = getattr(self.macro_loss, 'diff_type', 'reward') if self.macro_loss is not None else 'reward'
+            _trigger_type = getattr(self.macro_loss, 'trigger_type', 'reward') if self.macro_loss is not None else 'reward'
+            _has_critic_probe = agent is not None and getattr(agent, 'enable_critic_probe', False)
+            
+            # Probing은 무거운 작업이므로 매 스텝마다 실행되지 않도록 save_every_steps 단위로만 실행합니다.
+            if (global_step + epoch_step) % self.save_every_steps != 0:
+                pass
+            elif self.aux_value_module is not None or _diff_type in ['aux_value', 'aux_value_diff'] or _trigger_type in ['aux_value', 'aux_value_diff'] or _has_critic_probe:
                 try:
                     # 1. 디스크 I/O 병목 방지를 위한 텐서 캐싱 (1회만 로드)
                     if not hasattr(self, "_cached_probing_tensors"):
@@ -941,20 +1102,20 @@ class WorldModel(nn.Module):
                                     for state_val, t in state_dict.items():
                                         latent = self.encode_obs(t, sample_mode="mode")
                                         latents_dict[state_val] = latent
-                                        aux_value_symlog = self.macro_loss.aux_value_net(latent).squeeze(-1) # [M, 1]
-                                        slow_aux_value_symlog = self.macro_loss.slow_aux_value_net(latent).squeeze(-1)
-                                        
-                                        def symexp_local(x):
-                                            return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
-                                        
-                                        aux_value_linear = symexp_local(aux_value_symlog)
-                                        mean_val = aux_value_linear.mean().item()
-                                        
-                                        slow_aux_value_linear = symexp_local(slow_aux_value_symlog)
-                                        slow_mean_val = slow_aux_value_linear.mean().item()
-                                        
-                                        log_dict[f"Probing/{cat_name}_{state_val}_AuxValue_Mean"] = mean_val
-                                        log_dict[f"Probing_Slow/{cat_name}_{state_val}_AuxValue_Mean"] = slow_mean_val
+                                        if self.aux_value_module is not None:
+                                            def symexp_local(x):
+                                                return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
+                                            aux_value_symlog = self.aux_value_module(latent).squeeze(-1) # [M, 1]
+                                            slow_aux_value_symlog = self.aux_value_module.slow_net(latent).squeeze(-1)
+                                            
+                                            aux_value_linear = symexp_local(aux_value_symlog)
+                                            mean_val = aux_value_linear.mean().item()
+                                            
+                                            slow_aux_value_linear = symexp_local(slow_aux_value_symlog)
+                                            slow_mean_val = slow_aux_value_linear.mean().item()
+                                            
+                                            log_dict[f"Probing/{cat_name}_{state_val}_AuxValue_Mean"] = mean_val
+                                            log_dict[f"Probing_Slow/{cat_name}_{state_val}_AuxValue_Mean"] = slow_mean_val
                                         
                                         if agent is not None and hasattr(agent, 'critic_probe_net'):
                                             stateless_latent = latent[..., :agent.stateless_feat_dim]
