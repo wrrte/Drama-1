@@ -449,14 +449,23 @@ def joint_train_world_model_agent(config, logdir,
             if hasattr(config, 'Demonstration') and hasattr(config.Demonstration, 'Score') and hasattr(config.Demonstration, 'DemoRatioDecayScoreMultiplier'):
                 target_score = config.Demonstration.Score * config.Demonstration.DemoRatioDecayScoreMultiplier
                 if episode_score > target_score:
-                    decay_rate = getattr(config.Demonstration, 'DemoRatioDecayRate', 0.9)
+                    base_demo_decay_rate = getattr(config.Demonstration, 'DemoRatioDecayRate', 0.9)
+                    base_bc_decay_rate = getattr(config.Demonstration, 'BCWeightDecayRate', 0.65)
+                    base_episode_length = getattr(config.Demonstration, 'BaseEpisodeLength', 900.0)
+                    
+                    if demo_steps > 0:
+                        decay_rate = base_demo_decay_rate ** (base_episode_length / demo_steps)
+                        bc_decay_rate = base_bc_decay_rate ** (base_episode_length / demo_steps)
+                    else:
+                        decay_rate = base_demo_decay_rate
+                        bc_decay_rate = base_bc_decay_rate
+
                     threshold = getattr(config.Demonstration, 'DemoRatioDecayThreshold', 0.05)
                     
                     performance_decay_factor *= decay_rate
                     if performance_decay_factor < threshold:
                         performance_decay_factor = 0.0
                         
-                    bc_decay_rate = getattr(config.Demonstration, 'BCWeightDecayRate', 0.9)
                     bc_threshold = getattr(config.Demonstration, 'BCWeightDecayThreshold', 0.1)
                     
                     bc_weight_decay_factor *= bc_decay_rate
