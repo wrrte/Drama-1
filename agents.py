@@ -117,6 +117,13 @@ class ActorCriticAgent(nn.Module):
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
         act = getattr(nn, conf.Models.Agent.AC.Act)
 
+        # Parse LatentDropout config
+        macro_cfg = conf.Models.WorldModel.get("MacroLoss", {})
+        dropout_cfg = macro_cfg.get("LatentDropout", {})
+        use_dropout = bool(dropout_cfg.get("Enable", False))
+        dropout_p = float(dropout_cfg.get("Probability", 0.2))
+        dropout_target = str(dropout_cfg.get("Target", "aux_value_net")).lower()
+
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),
@@ -135,11 +142,15 @@ class ActorCriticAgent(nn.Module):
         ).to(device)
         
 
-        critic = [
+        critic = []
+        if use_dropout and dropout_target in ["critic", "both"]:
+            critic.append(nn.Dropout(p=dropout_p))
+            
+        critic.extend([
             layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
             RMSNorm(critic_hidden_dim),
             act()
-        ]
+        ])
         for i in range(num_layers - 1):
             critic.extend([
                 layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)),
@@ -161,6 +172,8 @@ class ActorCriticAgent(nn.Module):
         self.enable_critic_probe = getattr(conf.Models.Agent.AC, 'EnableCriticProbe', True)
         if self.enable_critic_probe:
             probe = []
+            if use_dropout and dropout_target in ["critic", "both"]:
+                probe.append(nn.Dropout(p=dropout_p))
             probe.extend([
                 layer_init(nn.Linear(self.stateless_feat_dim, critic_hidden_dim, bias=True)),
                 RMSNorm(critic_hidden_dim),
@@ -365,6 +378,13 @@ class PPOAgent(nn.Module):
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
         act = getattr(nn, conf.Models.Agent.PPO.Act)
 
+        # Parse LatentDropout config
+        macro_cfg = conf.Models.WorldModel.get("MacroLoss", {})
+        dropout_cfg = macro_cfg.get("LatentDropout", {})
+        use_dropout = bool(dropout_cfg.get("Enable", False))
+        dropout_p = float(dropout_cfg.get("Probability", 0.2))
+        dropout_target = str(dropout_cfg.get("Target", "aux_value_net")).lower()
+
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),
@@ -396,11 +416,15 @@ class PPOAgent(nn.Module):
         # Using state-independent for simplicity (common in PPO)
         self.actor_log_std = nn.Parameter(torch.zeros(1, action_dim)).to(device)
 
-        critic = [
+        critic = []
+        if use_dropout and dropout_target in ["critic", "both"]:
+            critic.append(nn.Dropout(p=dropout_p))
+            
+        critic.extend([
             layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
             RMSNorm(critic_hidden_dim),
             act()
-        ]
+        ])
         for i in range(num_layers - 1):
             critic.extend([
                 layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)),
