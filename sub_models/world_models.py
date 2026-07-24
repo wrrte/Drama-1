@@ -716,6 +716,10 @@ class WorldModel(nn.Module):
             
             total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
 
+            macro_loss = torch.tensor(0.0)
+            m_distill_loss = torch.tensor(0.0)
+            m_contrastive_loss = torch.tensor(0.0)
+
             if self.macro_loss is not None:
                 # Calculate TD error or Aux value difference using agent
                 values_sq = None

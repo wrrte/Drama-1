@@ -1,12 +1,4 @@
 
-4. Latent Dropout
-MACRO 내부적인 안정화 기법으로, 인코더가 특정한 픽셀(노이즈)에 과도하게 의존하는 것을 방지하기 위해 Latent State에 드롭아웃을 적용합니다.
-
-설정 위치: configure.yaml의 MacroLoss.LatentDropout.Enable: true
-구현 위치:
-graduate_research/sub_models/macro_loss.py 및 graduate_research/agents.py: 설정된 Target(critic 또는 aux_value_net)에 맞추어 Latent 공간에 드롭아웃을 가하도록 구현되어 있습니다.
-
-
 
 
 # Sonnet에게 논문 보여주고 의도대로 잘 작성되었는지 검토해달라고 하기.

@@ -98,7 +98,7 @@ Models:
       HashBits: 10
       MaxQueuePerKey: 100000
       MaxPastSamples: 16
-      LossScale: 10
+      LossScale: 0
       LazyRebuild:
         Enable: true
         SampleMultiplier: 8
@@ -107,7 +107,7 @@ Models:
       RebuildThreshold: 0.45
       RebuildCooldown: 3000
       RebuildBatchSize: 32768  
-      DisableAfterStep: 0  
+      DisableAfterStep: -1 
       StoreOnlyTriggered: false 
       Cutout:
         Enable: false

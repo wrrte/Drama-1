@@ -453,7 +453,7 @@ class MacroLoss(nn.Module):
                 demo_count = 0
                 agent_count = 0
                 if demo_size > 0:
-                    for idx in bucket:
+                    for idx in bucket.items:
                         val = idx.item() if hasattr(idx, 'item') else idx
                         if val < demo_size:
                             demo_count += 1
