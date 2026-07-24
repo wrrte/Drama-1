@@ -1043,8 +1043,7 @@ class WorldModel(nn.Module):
                                 "Oxygen": f"{base_probing_path}/{current_img_size}_selected_oxygen",
                                 "Lives": f"{base_probing_path}/{current_img_size}_selected_lives"
                             }
-                            if current_img_size == 64:
-                                categories["Distance"] = f"{base_probing_path}/64_sea_divers"
+
                         
                         for category_name, folder_path in categories.items():
                             alt_path = folder_path.split("/")[-1]
@@ -1127,24 +1126,11 @@ class WorldModel(nn.Module):
                                         recon_mse = F.mse_loss(recon_obs, t).item()
                                         log_dict[f"Probing_Recon_MSE/{cat_name}_{state_val}"] = recon_mse
                                         
-                                    if cat_name in ["Diver", "IglooBlocks", "Dynamite", "Trucks", "Distance"]:
-                                        if cat_name == "Distance":
-                                            import re
-                                            counts_and_keys = []
-                                            for k in latents_dict.keys():
-                                                nums = re.findall(r'\d+', k)
-                                                if nums:
-                                                    counts_and_keys.append((int(nums[-1]), k))
-                                            counts_and_keys.sort(key=lambda x: x[0])
-                                            diver_counts = [x[0] for x in counts_and_keys]
-                                            key_map = {x[0]: x[1] for x in counts_and_keys}
-                                            prefix_detail = "Probing_CosSim_Detail_Distance"
-                                            prefix_delta = "Probing_CosSim_Delta_Distance"
-                                        else:
-                                            diver_counts = sorted([int(k) for k in latents_dict.keys() if k.isdigit()])
-                                            key_map = {c: str(c) for c in diver_counts}
-                                            prefix_detail = "Probing_CosSim_Detail"
-                                            prefix_delta = "Probing_CosSim_Delta"
+                                    if cat_name in ["Diver", "IglooBlocks", "Dynamite", "Trucks"]:
+                                        diver_counts = sorted([int(k) for k in latents_dict.keys() if k.isdigit()])
+                                        key_map = {c: str(c) for c in diver_counts}
+                                        prefix_detail = "Probing_CosSim_Detail"
+                                        prefix_delta = "Probing_CosSim_Delta"
 
                                         delta_sims = {}
                                         for i in range(len(diver_counts)):

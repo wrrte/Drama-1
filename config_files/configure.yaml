@@ -17,7 +17,7 @@ Evaluate:
    EverySteps: 2000
 
 Demonstration:
-  Enable: False
+  Enable: True
   SkipPretrain: True
   Directory: "demonstrations"
   MaxFiles: 1
@@ -26,8 +26,8 @@ Demonstration:
   WorldModelDemoRatio: 0.1
 
   AgentDemoRatio: 0.0
-  AgentDemoRatioStartStep: 3000
-  AgentDemoRatioPeakStep: 4000
+  AgentDemoRatioStartStep: 5000
+  AgentDemoRatioPeakStep: 6000
   AgentDemoRatioPeak: 0.1
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
@@ -46,7 +46,7 @@ JointTrainAgent:
   WorldModelWarmUp: 1984
   BehaviourWarmUp: 1984
   NumEnvs: 1
-  BatchSize: 32 # 16
+  BatchSize: 16 # 16
   BatchLength: 128
   ImagineBatchSize: 1024
   ImagineContextLength: 8
@@ -122,11 +122,11 @@ Models:
       AuxLam: 0.95
     DynWeighting:
       Enable: false
-      UseAuxValueNet: false  # true면 별도의 aux_value_net 학습(오버헤드 발생), false면 에이전트의 critic(values_sq) 재사용
-      Scale: 20.0           # α: value diff에 곱해지는 스케일 (z-score 기준이므로 25~50 적당)
-      MaxWeight: 100.0      # 가중치 상한 (gradient 폭발 방지)
-      ApplyToRecon: true    # reconstruction loss에 적용
-      ApplyToReward: true   # reward loss에 적용
+      UseAuxValueNet: false
+      Scale: 20.0
+      MaxWeight: 100.0
+      ApplyToRecon: true
+      ApplyToReward: true
     Adam:
       LearningRate: 1.0e-4
     Laprop:
