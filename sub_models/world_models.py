@@ -517,7 +517,8 @@ class WorldModel(nn.Module):
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
     @profile
     def imagine_data(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
-                     imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
+                     imagine_batch_size, imagine_batch_length, log_video, logger, global_step,
+                     demo_mask=None, future_actions=None):
 
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         self.sequence_model.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
@@ -538,6 +539,11 @@ class WorldModel(nn.Module):
         # imagine
         for i in range(imagine_batch_length):
             action, _ = agent.sample(torch.cat([self.sample_buffer[:, i:i+1], self.dist_feat_buffer[:, i:i+1]], dim=-1))
+            
+            if demo_mask is not None and future_actions is not None:
+                demo_mask_expand = demo_mask.unsqueeze(1).to(action.device)
+                action = torch.where(demo_mask_expand, future_actions[:, i:i+1], action)
+                
             self.action_buffer[:, i:i+1] = action
 
             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
@@ -560,7 +566,8 @@ class WorldModel(nn.Module):
 
     @profile
     def imagine_data2(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
-                     imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
+                     imagine_batch_size, imagine_batch_length, log_video, logger, global_step,
+                     demo_mask=None, future_actions=None):
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         # context
         context_latent = self.encode_obs(sample_obs)
@@ -624,6 +631,11 @@ class WorldModel(nn.Module):
             i = 0
             while not should_stop(sample_list[-1], inference_params):
                 action, logits = agent.sample(torch.cat([self.sample_buffer[:, i:i+1], self.dist_feat_buffer[:, i:i+1]], dim=-1))
+                
+                if demo_mask is not None and future_actions is not None:
+                    demo_mask_expand = demo_mask.unsqueeze(1).to(action.device)
+                    action = torch.where(demo_mask_expand, future_actions[:, i:i+1], action)
+                    
                 action_list.append(action)
                 self.action_buffer[:, i:i+1] = action
                 old_logits_list.append(logits)
