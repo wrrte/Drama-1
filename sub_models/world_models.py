@@ -747,7 +747,7 @@ class WorldModel(nn.Module):
                     replay_buffer=replay_buffer,
                     global_step=global_step,
                     latent_full=flattened_sample,
-                    aux_gamma=0.985,
+                    aux_gamma=self.macro_loss.aux_gamma,
                     aux_lam=0.95
                 )
                 total_loss = total_loss + macro_loss

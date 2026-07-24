@@ -82,6 +82,7 @@ Models:
     Weight_decay: 1.0e-4
     MacroLoss:
       Enable: true
+      AuxGamma: 0.985
       DistanceMetric: margin                 
       DBCAlpha: 0.3                       
       Margin: 0.92                         

@@ -54,6 +54,10 @@ class MacroLoss(nn.Module):
         cfg = config or {}
         self.enabled = bool(cfg.get("Enable", False))
         
+        self.aux_gamma = cfg.get("AuxGamma", None)
+        if self.aux_gamma is not None:
+            self.aux_gamma = float(self.aux_gamma)
+        
         self.trigger_type = str(cfg.get("TriggerType", "reward")).lower()
         self.diff_type = str(cfg.get("DiffType", "reward")).lower()
         if self.diff_type not in ["reward", "td_error", "value", "aux_value"]:
