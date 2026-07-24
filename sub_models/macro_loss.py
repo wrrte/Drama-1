@@ -178,6 +178,16 @@ class MacroLoss(nn.Module):
 
         self.register_buffer("running_max_metric", torch.tensor(1.0, dtype=torch.float32), persistent=False)
 
+        # --- [추가] Dynamics Weighting 설정 ---
+        dyn_cfg = cfg.get("DynWeighting", {})
+        self.dyn_weighting_enable = bool(dyn_cfg.get("Enable", False))
+        self.dyn_weighting_scale = float(dyn_cfg.get("Scale", 50.0))
+        self.dyn_weighting_max = float(dyn_cfg.get("MaxWeight", 100.0))
+        self.dyn_weighting_apply_recon = bool(dyn_cfg.get("ApplyToRecon", True))
+        self.dyn_weighting_apply_reward = bool(dyn_cfg.get("ApplyToReward", True))
+        self.register_buffer("dyn_running_max_value", torch.tensor(1e-8, dtype=torch.float32), persistent=True)
+        # ------------------------------------------
+
     def _update_welford(self, td_error, valid_mask):
         valid_td = td_error[valid_mask].to(torch.float64)
         
@@ -247,6 +257,39 @@ class MacroLoss(nn.Module):
         self.aux_value_var.copy_(new_var)
 
         return self.aux_value_mean.to(torch.float32), self.aux_value_var.to(torch.float32)
+
+    def compute_dynamics_weights(self, latent_full):
+        """Value-diff에 비례하는 dynamics loss 가중치를 계산합니다.
+        
+        Returns:
+            weights: [B, L] shape tensor, 각 프레임의 dynamics loss 가중치.
+                     value 변화가 없는 프레임은 1.0, 급변하는 프레임은 1+scale*diff.
+                     None if dyn_weighting is disabled.
+        """
+        if not self.dyn_weighting_enable:
+            return None
+        
+        with torch.no_grad():
+            aux_val_symlog = self.aux_value_net(latent_full.detach()).squeeze(-1)  # [B, L]
+            aux_val_linear = symexp(aux_val_symlog)
+            
+            # 인접 프레임 간 value 절대 차이
+            val_diff = torch.zeros_like(aux_val_linear)
+            val_diff[:, 1:] = torch.abs(aux_val_linear[:, 1:] - aux_val_linear[:, :-1])
+            
+            # Running max로 정규화 (EMA decay 적용)
+            current_max = torch.max(torch.abs(aux_val_linear))
+            self.dyn_running_max_value.copy_(
+                torch.max(self.dyn_running_max_value * 0.999, current_max)
+            )
+            
+            val_diff_norm = val_diff / self.dyn_running_max_value.clamp(min=1e-8)
+            
+            # 가중치 계산: 1 + scale * normalized_diff
+            weights = 1.0 + self.dyn_weighting_scale * val_diff_norm
+            weights = weights.clamp(max=self.dyn_weighting_max)
+        
+        return weights
 
     def _hash_keys(self, latent):
         if latent.numel() == 0:

@@ -233,9 +233,11 @@ class MSELoss(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, obs_hat, obs):
+    def forward(self, obs_hat, obs, reduction='mean'):
         distance = (obs_hat - obs)**2
         loss = reduce(distance, "B L C H W -> B L", "sum")
+        if reduction == 'none':
+            return loss  # [B, L] shape for per-frame weighting
         return loss.mean()
 
 
@@ -388,7 +390,9 @@ class WorldModel(nn.Module):
         
         macro_cfg = getattr(config.Models.WorldModel, 'MacroLoss', {})
         macro_enable = getattr(macro_cfg, 'Enable', False)
-        if MacroLoss is not None and macro_enable:
+        dyn_weighting_enable = bool(getattr(macro_cfg, 'DynWeighting', {}).get('Enable', False)) if hasattr(macro_cfg, 'DynWeighting') else False
+        # MacroLoss 모듈은 contrastive loss가 켜져 있거나 dynamics weighting이 켜져 있으면 생성
+        if MacroLoss is not None and (macro_enable or dyn_weighting_enable):
             buffer_max_length = getattr(config.BasicSettings, 'BufferMaxLength', 100000)
             self.macro_loss = MacroLoss(
                 latent_dim=self.stoch_flattened_dim,
@@ -706,11 +710,32 @@ class WorldModel(nn.Module):
             reward_hat = self.reward_decoder(dist_feat)
             termination_hat = self.termination_decoder(dist_feat)
 
+            # --- Dynamics Weighting 계산 ---
+            dyn_weights = None
+            if self.macro_loss is not None:
+                dyn_weights = self.macro_loss.compute_dynamics_weights(flattened_sample)
+
             # env loss
-            reconstruction_loss = self.mse_loss_func(obs_hat[:batch_size], obs[:batch_size])
-            reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
+            if dyn_weights is not None:
+                # Per-frame loss 계산 후 가중 평균
+                recon_per_frame = self.mse_loss_func(obs_hat[:batch_size], obs[:batch_size], reduction='none')  # [B, L]
+                reward_per_frame = self.symlog_twohot_loss_func(reward_hat, reward, reduction='none')  # [B, L]
+                
+                if self.macro_loss.dyn_weighting_apply_recon:
+                    reconstruction_loss = (recon_per_frame * dyn_weights).mean()
+                else:
+                    reconstruction_loss = recon_per_frame.mean()
+                    
+                if self.macro_loss.dyn_weighting_apply_reward:
+                    reward_loss = (reward_per_frame * dyn_weights).mean()
+                else:
+                    reward_loss = reward_per_frame.mean()
+            else:
+                reconstruction_loss = self.mse_loss_func(obs_hat[:batch_size], obs[:batch_size])
+                reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
+            
             termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
-            # dyn-rep loss
+            # dyn-rep loss (KL에는 dynamics weighting 적용하지 않음)
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
             
@@ -755,6 +780,12 @@ class WorldModel(nn.Module):
                     logger.log("WorldModel/macro_loss", macro_loss.item(), global_step=global_step)
                     logger.log("WorldModel/macro_distill_loss", m_distill_loss.item(), global_step=global_step)
                     logger.log("WorldModel/macro_contrastive_loss", m_contrastive_loss.item(), global_step=global_step)
+
+            # --- Dynamics Weighting wandb 로깅 ---
+            if dyn_weights is not None and logger is not None:
+                logger.log("DynWeighting/mean_weight", dyn_weights.mean().item(), global_step=global_step)
+                logger.log("DynWeighting/max_weight", dyn_weights.max().item(), global_step=global_step)
+                logger.log("DynWeighting/boosted_frame_ratio", (dyn_weights > 1.5).float().mean().item(), global_step=global_step)
 
         # gradient descent
         self.scaler.scale(total_loss).backward()

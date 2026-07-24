@@ -81,7 +81,7 @@ Models:
     Unimix_ratio: 0.01
     Weight_decay: 1.0e-4
     MacroLoss:
-      Enable: true
+      Enable: false
       AuxGamma: 0.985
       DistanceMetric: margin                 
       DBCAlpha: 0.3                       
@@ -116,6 +116,12 @@ Models:
         Enable: true
         Probability: 0.2
         Target: critic
+      DynWeighting:
+        Enable: true
+        Scale: 50.0           # α: value diff에 곱해지는 스케일
+        MaxWeight: 100.0      # 가중치 상한 (gradient 폭발 방지)
+        ApplyToRecon: true    # reconstruction loss에 적용
+        ApplyToReward: true   # reward loss에 적용
     Adam:
       LearningRate: 1.0e-4
     Laprop:
