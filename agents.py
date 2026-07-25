@@ -242,7 +242,7 @@ class ActorCriticAgent(nn.Module):
     def unimix(self, logits):
         # uniform noise mixing
         if self.unimix_ratio > 0:
-            probs = F.softmax(logits.float(), dim=-1)
+            probs = F.softmax(logits, dim=-1)
             uniform = torch.ones_like(probs) / self.action_dim
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
             logits = torch.log(mixed_probs).to(dtype=logits.dtype)
@@ -253,7 +253,7 @@ class ActorCriticAgent(nn.Module):
         self.eval()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             logits = self.policy(latent)
-            dist = distributions.Categorical(logits=logits.float())
+            dist = distributions.Categorical(logits=logits)
             if greedy:
                 action = dist.probs.argmax(dim=-1)
             else:
@@ -271,7 +271,7 @@ class ActorCriticAgent(nn.Module):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             logits, raw_value = self.get_logits_raw_value(latent)
-            dist = distributions.Categorical(logits=logits[:, :-1].float())
+            dist = distributions.Categorical(logits=logits[:, :-1])
             log_prob = dist.log_prob(action)
             entropy = dist.entropy()
 
@@ -482,7 +482,7 @@ class PPOAgent(nn.Module):
         if self.is_discrete:
             # Discrete actions
             logits = self.actor(actor_input)
-            dist = distributions.Categorical(logits=logits.float())
+            dist = distributions.Categorical(logits=logits)
             logp_prob = dist.log_prob(action)
             entropy = dist.entropy()
         else:
@@ -500,7 +500,7 @@ class PPOAgent(nn.Module):
             return logits  # No unimix for continuous
         # uniform noise mixing
         if self.unimix_ratio > 0:
-            probs = F.softmax(logits.float(), dim=-1)
+            probs = F.softmax(logits, dim=-1)
             uniform = torch.ones_like(probs) / self.action_dim
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
             logits = torch.log(mixed_probs).to(dtype=logits.dtype)
@@ -601,7 +601,7 @@ class PPOAgent(nn.Module):
             feat_dim = latent.shape[-1]
             if self.is_discrete:
                 # old_logits: (B, T, action_dim), action: (B, T)
-                dist_old = distributions.Categorical(logits=old_logits.float())
+                dist_old = distributions.Categorical(logits=old_logits)
                 old_logp = dist_old.log_prob(action)  # (B, T)
                 flatten_latent = latent[:, :-1].reshape(-1, feat_dim)   # (B*T, D)
                 flatten_action = action.reshape(-1)                     # (B*T,)
@@ -719,7 +719,7 @@ class PPOAgent(nn.Module):
             if self.is_discrete:
                 logits = self.actor(latent)
                 logits = self.unimix(logits)
-                dist = distributions.Categorical(logits=logits.float())
+                dist = distributions.Categorical(logits=logits)
                 if greedy:
                     action = dist.probs.argmax(dim=-1)
                 else:

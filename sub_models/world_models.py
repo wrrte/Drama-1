@@ -164,7 +164,7 @@ class DistHead(nn.Module):
     def unimix(self, logits, mixing_ratio=0.01):
         # uniform noise mixing
         if mixing_ratio > 0:
-            probs = F.softmax(logits.float(), dim=-1)
+            probs = F.softmax(logits, dim=-1)
             mixed_probs = mixing_ratio * torch.ones_like(probs) / self.stoch_dim + (1-mixing_ratio) * probs
             logits = torch.log(mixed_probs).to(dtype=logits.dtype)
         return logits
@@ -299,8 +299,8 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
         self.free_bits = free_bits
 
     def forward(self, p_logits, q_logits):
-        p_dist = OneHotCategorical(logits=p_logits.float())
-        q_dist = OneHotCategorical(logits=q_logits.float())
+        p_dist = OneHotCategorical(logits=p_logits)
+        q_dist = OneHotCategorical(logits=q_logits)
         kl_div = torch.distributions.kl.kl_divergence(p_dist, q_dist)
         kl_div = reduce(kl_div, "B L D -> B L", "sum")
         kl_div = kl_div.mean()
@@ -509,7 +509,7 @@ class WorldModel(nn.Module):
             else:
                 if values_sq is None:
                     raise ValueError("UseAuxValueNet is false but values_sq is not provided to compute_dynamics_weights")
-                aux_val_linear = symexp(values_sq.detach()).to(torch.float32)
+                aux_val_linear = values_sq.detach().to(torch.float32)
                 align_mask = torch.ones_like(aux_val_linear, dtype=torch.bool)
                 if align_mask.dim() >= 2:
                     align_mask[..., 0] = False
@@ -599,7 +599,7 @@ class WorldModel(nn.Module):
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, dist_feat
     @profile
     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
-        dist = OneHotCategorical(logits=logits.float())
+        dist = OneHotCategorical(logits=logits)
         # dist = Independent(
         #     OneHotDist(logits), 1
         # )        
@@ -969,7 +969,13 @@ class WorldModel(nn.Module):
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
         else:
-            print(f"[WARNING] Skipping WorldModel optimizer step due to NaN/Inf gradients. Loss={total_loss.item()}")
+            if torch.isnan(total_loss) or torch.isinf(total_loss):
+                print(f"[WARNING] Skipping WorldModel optimizer step due to NaN/Inf gradients. Loss={total_loss.item()}")
+                print(f"          Components: recon={reconstruction_loss.item():.4f}, reward={reward_loss.item():.4f}, term={termination_loss.item():.4f}, dyn={dynamics_loss.item():.4f}, rep={representation_loss.item():.4f}")
+                if dyn_weights is not None:
+                    print(f"          dyn_weights: max={dyn_weights.max().item():.4f}, min={dyn_weights.min().item():.4f}, nan={torch.isnan(dyn_weights).any().item()}")
+            else:
+                print(f"[WARNING] Skipping WorldModel optimizer step due to NaN/Inf gradients (Loss is finite: {total_loss.item():.4f})")
             
         self.optimizer.zero_grad(set_to_none=True)
         
