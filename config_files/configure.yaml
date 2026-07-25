@@ -36,6 +36,8 @@ Demonstration:
   BaseEpisodeLength: 800
   DemoRatioDecayRate: 0.4
   DemoRatioDecayThreshold: 0.05
+
+  BCWeight: 11.0
   BCWeightDecayRate: 0.65
   BCWeightDecayThreshold: 0.1
 
@@ -123,7 +125,7 @@ Models:
     DynWeighting:
       Enable: true
       UseAuxValueNet: false
-      Scale: 20.0
+      Scale: 10.0
       MaxWeight: 100.0
       ApplyToRecon: true
       ApplyToReward: true
