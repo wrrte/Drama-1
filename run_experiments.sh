@@ -12,6 +12,8 @@ export MUJOCO_GL="egl"
 
 
 python train.py --BasicSettings.Env_name "ALE/Seaquest-v5"
+python train.py --BasicSettings.Env_name "ALE/Seaquest-v5" --Models.WorldModel.DynWeighting.Enable false
+
 python train.py --BasicSettings.Env_name "ALE/Hero-v5"
 python train.py --BasicSettings.Env_name "ALE/Frostbite-v5"
 

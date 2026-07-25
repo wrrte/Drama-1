@@ -52,7 +52,10 @@ class WandbLogger:
         
         pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
         try:
-            loss_scale = config.Models.WorldModel.MacroLoss.LossScale
+            if not config.Models.WorldModel.DynWeighting.Enable:
+                loss_scale = "x"
+            else:
+                loss_scale = config.Models.WorldModel.DynWeighting.Scale
         except Exception:
             loss_scale = "N/A"
             

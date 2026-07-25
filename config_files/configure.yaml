@@ -26,15 +26,15 @@ Demonstration:
   WorldModelDemoRatio: 0.1
 
   AgentDemoRatio: 0.0
-  AgentDemoRatioStartStep: 3000
-  AgentDemoRatioPeakStep: 4000
+  AgentDemoRatioStartStep: 5000
+  AgentDemoRatioPeakStep: 6000
   AgentDemoRatioPeak: 0.1
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
 
-  DemoRatioDecayScoreMultiplier: 0.9
+  DemoRatioDecayScoreMultiplier: 0.5
   BaseEpisodeLength: 800
-  DemoRatioDecayRate: 0.4
+  DemoRatioDecayRate: 0.9
   DemoRatioDecayThreshold: 0.05
 
   BCWeight: 11.0
@@ -128,7 +128,7 @@ Models:
       Scale: 10.0
       MaxWeight: 100.0
       ApplyToRecon: true
-      ApplyToReward: true
+      ApplyToReward: false
     Adam:
       LearningRate: 1.0e-4
     Laprop:
@@ -176,7 +176,7 @@ Models:
       NumLayers: 3    
       Gamma: 0.985
       Lambda: 0.95
-      EntropyCoef: 3.e-4
+      EntropyCoef: 5.e-4
       Max_grad_norm: 100
       Warmup_steps: 1000
       Act: SiLU
