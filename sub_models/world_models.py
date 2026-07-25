@@ -164,9 +164,9 @@ class DistHead(nn.Module):
     def unimix(self, logits, mixing_ratio=0.01):
         # uniform noise mixing
         if mixing_ratio > 0:
-            probs = F.softmax(logits, dim=-1)
-            mixed_probs = mixing_ratio * torch.ones_like(probs, dtype=self.dtype, device=self.device) / self.stoch_dim + (1-mixing_ratio) * probs
-            logits = torch.log(mixed_probs)
+            probs = F.softmax(logits.float(), dim=-1)
+            mixed_probs = mixing_ratio * torch.ones_like(probs) / self.stoch_dim + (1-mixing_ratio) * probs
+            logits = torch.log(mixed_probs).to(dtype=logits.dtype)
         return logits
 
     def forward_post(self, x):
@@ -299,8 +299,8 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
         self.free_bits = free_bits
 
     def forward(self, p_logits, q_logits):
-        p_dist = OneHotCategorical(logits=p_logits)
-        q_dist = OneHotCategorical(logits=q_logits)
+        p_dist = OneHotCategorical(logits=p_logits.float())
+        q_dist = OneHotCategorical(logits=q_logits.float())
         kl_div = torch.distributions.kl.kl_divergence(p_dist, q_dist)
         kl_div = reduce(kl_div, "B L D -> B L", "sum")
         kl_div = kl_div.mean()
@@ -446,7 +446,8 @@ class WorldModel(nn.Module):
         # self.optimizer = AGC(self.parameters(), self.optimizer)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=config.Models.WorldModel.Warmup_steps)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp and config.Models.WorldModel.dtype is not torch.bfloat16)
+        # GradScaler is incompatible with bfloat16 autocast and causes artificial gradient explosions.
+        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
         
         macro_cfg = getattr(config.Models.WorldModel, 'MacroLoss', {})
         macro_enable = getattr(macro_cfg, 'Enable', False)
@@ -477,8 +478,15 @@ class WorldModel(nn.Module):
     @profile
     def encode_obs(self, obs, sample_mode="random_sample"):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+            if torch.isnan(obs).any() or torch.isinf(obs).any():
+                print(f"[DEBUG encode_obs] NaN/Inf in obs! nan={torch.isnan(obs).sum().item()}, inf={torch.isinf(obs).sum().item()}, shape={obs.shape}, dtype={obs.dtype}")
             embedding = self.encoder(obs)
+            if torch.isnan(embedding).any() or torch.isinf(embedding).any():
+                print(f"[DEBUG encode_obs] NaN/Inf in embedding! nan={torch.isnan(embedding).sum().item()}, inf={torch.isinf(embedding).sum().item()}, shape={embedding.shape}, dtype={embedding.dtype}")
             post_logits = self.dist_head.forward_post(embedding)
+            if torch.isnan(post_logits).any() or torch.isinf(post_logits).any():
+                print(f"[DEBUG encode_obs] NaN/Inf in post_logits! nan={torch.isnan(post_logits).sum().item()}, inf={torch.isinf(post_logits).sum().item()}, shape={post_logits.shape}, dtype={post_logits.dtype}")
+                print(f"[DEBUG encode_obs] post_logits stats: min={post_logits[~torch.isnan(post_logits)].min().item():.4f}, max={post_logits[~torch.isnan(post_logits)].max().item():.4f}")
             sample = self.stright_throught_gradient(post_logits, sample_mode=sample_mode)
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
@@ -591,7 +599,7 @@ class WorldModel(nn.Module):
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, dist_feat
     @profile
     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
-        dist = OneHotCategorical(logits=logits)
+        dist = OneHotCategorical(logits=logits.float())
         # dist = Independent(
         #     OneHotDist(logits), 1
         # )        
@@ -603,7 +611,7 @@ class WorldModel(nn.Module):
             # sample = dist.mode()
         elif sample_mode == "probs":
             sample = dist.probs
-        return sample
+        return sample.to(dtype=logits.dtype)
     
     
     def flatten_sample(self, sample):
@@ -946,12 +954,24 @@ class WorldModel(nn.Module):
         # gradient descent
         self.scaler.scale(total_loss).backward()
         self.scaler.unscale_(self.optimizer)  # for clip grad
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        
+        # Manually check for NaN/Inf gradients to prevent LaProp from corrupting weights
+        grad_is_valid = True
+        for p in self.parameters():
+            if p.grad is not None and not p.grad.isfinite().all():
+                grad_is_valid = False
+                break
+                
+        if grad_is_valid:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.lr_scheduler.step()
+            self.warmup_scheduler.dampen()
+        else:
+            print(f"[WARNING] Skipping WorldModel optimizer step due to NaN/Inf gradients. Loss={total_loss.item()}")
+            
         self.optimizer.zero_grad(set_to_none=True)
-        self.lr_scheduler.step()
-        self.warmup_scheduler.dampen()
         
         if self.aux_value_module is not None:
             self.aux_value_module.update_slow_target(decay=0.98)

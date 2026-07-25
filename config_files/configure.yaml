@@ -34,7 +34,7 @@ Demonstration:
 
   DemoRatioDecayScoreMultiplier: 0.9
   BaseEpisodeLength: 800
-  DemoRatioDecayRate: 0.9
+  DemoRatioDecayRate: 0.4
   DemoRatioDecayThreshold: 0.05
   BCWeightDecayRate: 0.65
   BCWeightDecayThreshold: 0.1
@@ -121,7 +121,7 @@ Models:
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
-      Enable: false
+      Enable: true
       UseAuxValueNet: false
       Scale: 20.0
       MaxWeight: 100.0

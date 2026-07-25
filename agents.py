@@ -210,7 +210,8 @@ class ActorCriticAgent(nn.Module):
         # self.optimizer = AGC(self.parameters(), self.optimizer)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.AC.Warmup_steps)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        # GradScaler is incompatible with bfloat16 autocast and causes artificial gradient explosions.
+        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
 
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
@@ -241,10 +242,10 @@ class ActorCriticAgent(nn.Module):
     def unimix(self, logits):
         # uniform noise mixing
         if self.unimix_ratio > 0:
-            probs = F.softmax(logits, dim=-1)
+            probs = F.softmax(logits.float(), dim=-1)
             uniform = torch.ones_like(probs) / self.action_dim
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
-            logits = torch.log(mixed_probs)
+            logits = torch.log(mixed_probs).to(dtype=logits.dtype)
         return logits
 
     @torch.no_grad()
@@ -252,7 +253,7 @@ class ActorCriticAgent(nn.Module):
         self.eval()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             logits = self.policy(latent)
-            dist = distributions.Categorical(logits=logits)
+            dist = distributions.Categorical(logits=logits.float())
             if greedy:
                 action = dist.probs.argmax(dim=-1)
             else:
@@ -270,7 +271,7 @@ class ActorCriticAgent(nn.Module):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             logits, raw_value = self.get_logits_raw_value(latent)
-            dist = distributions.Categorical(logits=logits[:, :-1])
+            dist = distributions.Categorical(logits=logits[:, :-1].float())
             log_prob = dist.log_prob(action)
             entropy = dist.entropy()
 
@@ -320,21 +321,32 @@ class ActorCriticAgent(nn.Module):
             self.scaler.scale(probe_loss).backward()
             
         self.scaler.unscale_(self.optimizer)  # for clip grad
-        main_params = [p for n, p in self.named_parameters() if 'critic_probe' not in n]
-        torch.nn.utils.clip_grad_norm_(main_params, max_norm=self.max_grad_norm)
         
-        self.scaler.step(self.optimizer)
-        if hasattr(self, 'critic_probe_net'):
-            self.scaler.step(self.critic_probe_optimizer)
+        # Manually check for NaN/Inf gradients to prevent LaProp from corrupting weights
+        grad_is_valid = True
+        for p in self.parameters():
+            if p.grad is not None and not p.grad.isfinite().all():
+                grad_is_valid = False
+                break
+                
+        if grad_is_valid:
+            main_params = [p for n, p in self.named_parameters() if 'critic_probe' not in n]
+            torch.nn.utils.clip_grad_norm_(main_params, max_norm=self.max_grad_norm)
             
-        self.scaler.update()
+            self.scaler.step(self.optimizer)
+            if hasattr(self, 'critic_probe_net'):
+                self.scaler.step(self.critic_probe_optimizer)
+                
+            self.scaler.update()
+            self.lr_scheduler.step()
+            self.warmup_scheduler.dampen()
+            self.update_slow_critic()
+        else:
+            print(f"[WARNING] Skipping Agent optimizer step due to NaN/Inf gradients. Loss={loss.item()}")
+            
         self.optimizer.zero_grad(set_to_none=True)
         if hasattr(self, 'critic_probe_net'):
             self.critic_probe_optimizer.zero_grad(set_to_none=True)
-            
-        self.lr_scheduler.step()
-        self.warmup_scheduler.dampen()
-        self.update_slow_critic()
 
         if logger is not None:
             logger.log('ActorCritic/policy_loss', policy_loss.item(), global_step=global_step)
@@ -454,7 +466,8 @@ class PPOAgent(nn.Module):
             raise ValueError(f"Unknown optimiser: {conf.Models.Agent.PPO.Optimiser}")
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.PPO.Warmup_steps)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        # GradScaler is incompatible with bfloat16 autocast and causes artificial gradient explosions.
+        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
     
     @profile
     def get_logp_val_entr(self, latent, action, longer_value=True):
@@ -469,7 +482,7 @@ class PPOAgent(nn.Module):
         if self.is_discrete:
             # Discrete actions
             logits = self.actor(actor_input)
-            dist = distributions.Categorical(logits=logits)
+            dist = distributions.Categorical(logits=logits.float())
             logp_prob = dist.log_prob(action)
             entropy = dist.entropy()
         else:
@@ -487,10 +500,10 @@ class PPOAgent(nn.Module):
             return logits  # No unimix for continuous
         # uniform noise mixing
         if self.unimix_ratio > 0:
-            probs = F.softmax(logits, dim=-1)
+            probs = F.softmax(logits.float(), dim=-1)
             uniform = torch.ones_like(probs) / self.action_dim
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
-            logits = torch.log(mixed_probs)
+            logits = torch.log(mixed_probs).to(dtype=logits.dtype)
         return logits
 
     def sample_as_env_action(self, latent, greedy=False):
@@ -588,7 +601,7 @@ class PPOAgent(nn.Module):
             feat_dim = latent.shape[-1]
             if self.is_discrete:
                 # old_logits: (B, T, action_dim), action: (B, T)
-                dist_old = distributions.Categorical(logits=old_logits)
+                dist_old = distributions.Categorical(logits=old_logits.float())
                 old_logp = dist_old.log_prob(action)  # (B, T)
                 flatten_latent = latent[:, :-1].reshape(-1, feat_dim)   # (B*T, D)
                 flatten_action = action.reshape(-1)                     # (B*T,)
@@ -662,25 +675,33 @@ class PPOAgent(nn.Module):
                         bc_weight_decay_factor
                     )
                     
-                    total_loss = actor_loss + self.c1 * critic_loss + slow_critic_loss - self.c2 * entropy_loss
+                    loss = actor_loss + self.c1 * critic_loss + slow_critic_loss - self.c2 * entropy_loss
 
                     entropy_loss_list.append(-entropy_loss.item())
                     actor_loss_list.append(actor_loss.item())
                     critic_loss_list.append(critic_loss.item())
-                    total_loss_list.append(total_loss.item())
+                    total_loss_list.append(loss.item())
                     kl_approx_list.append(kl_apx.item())
 
-                    self.scaler.scale(total_loss).backward()
-                    self.scaler.unscale_(self.optimizer)  # for clip grad
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.optimizer.zero_grad(set_to_none=True)
-
-                    self.update_slow_critic()
-                    
+                    loss.backward()
+        
+        # Manually check for NaN/Inf gradients to prevent optimizer from corrupting weights
+        grad_is_valid = True
+        for p in self.parameters():
+            if p.grad is not None and not p.grad.isfinite().all():
+                grad_is_valid = False
+                break
+                
+        if grad_is_valid:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
+            self.optimizer.step()
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
+            self.update_slow_critic()
+        else:
+            print(f"[WARNING] Skipping DreamerV3 Agent optimizer step due to NaN/Inf gradients. Loss={loss.item()}")
+            
+        self.optimizer.zero_grad(set_to_none=True)
         if logger is not None:
             logger.log('ActorCritic/policy_loss', np.mean(actor_loss_list), global_step=global_step)
             logger.log('ActorCritic/value_loss', np.mean(critic_loss_list), global_step=global_step)
@@ -698,7 +719,7 @@ class PPOAgent(nn.Module):
             if self.is_discrete:
                 logits = self.actor(latent)
                 logits = self.unimix(logits)
-                dist = distributions.Categorical(logits=logits)
+                dist = distributions.Categorical(logits=logits.float())
                 if greedy:
                     action = dist.probs.argmax(dim=-1)
                 else:
