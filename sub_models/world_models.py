@@ -880,7 +880,7 @@ class WorldModel(nn.Module):
                     align_mask[..., 0] = False
                     align_mask[..., -1] = False
                 
-                m_distill_loss = self.mse_loss_func(aux_val_symlog[align_mask], sym_target_value[align_mask])
+                m_distill_loss = F.mse_loss(aux_val_symlog[align_mask], sym_target_value[align_mask])
 
             # env loss
             if dyn_weights is not None:
@@ -916,10 +916,11 @@ class WorldModel(nn.Module):
 
             if self.macro_loss is not None:
                 flattened_logits = rearrange(post_logits, "B L K C -> B L (K C)")
-                # MacroLoss에는 이미 계산된 aux_val_linear_full 및 aux_std를 전달 (트리거용)
+                
+                aux_mean = self.aux_value_module.aux_value_mean.to(torch.float32) if self.aux_value_module is not None else None
                 aux_std = torch.sqrt(self.aux_value_module.aux_value_var.to(torch.float32) + 1e-8) if self.aux_value_module is not None else None
                 
-                macro_loss, m_contrastive_loss, trigger_obs, t_mask, t_mask_orig = self.macro_loss(
+                macro_loss, m_distill_loss_macro, m_contrastive_loss, trigger_obs, t_mask, t_mask_orig = self.macro_loss(
                     obs=obs,
                     latent=flattened_sample,
                     logits=flattened_logits,
@@ -927,14 +928,16 @@ class WorldModel(nn.Module):
                     encode_fn=self.encode_for_macro,
                     reward_mean=0.0,
                     reward_std=1.0,
-                    value=values_sq, 
-                    aux_value_linear=aux_val_linear_full,
-                    aux_std=aux_std,
+                    value=values_sq,
+                    aux_value=aux_val_symlog,
                     termination=termination,
                     indexes=indexes,
                     replay_buffer=replay_buffer,
                     global_step=global_step,
-                    latent_full=flattened_sample
+                    latent_full=flattened_sample,
+                    aux_mean=aux_mean,
+                    aux_std=aux_std,
+                    aux_value_fn=self.aux_value_module
                 )
                 total_loss = total_loss + macro_loss
                 

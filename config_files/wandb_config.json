@@ -1,0 +1,2085 @@
+[
+  {
+    "n": {
+      "value": "standard"
+    },
+    "Wandb": {
+      "value": {
+        "Init": {
+          "Mode": "online",
+          "Project": "Mamba_dreamer_v2"
+        }
+      }
+    },
+    "Models": {
+      "value": {
+        "Agent": {
+          "AC": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 11,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "EntropyCoef": 0.0005,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100,
+            "EnableCriticProbe": true
+          },
+          "PPO": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 10,
+            "K_epochs": 3,
+            "Minibatch": 16384,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "CriticCoef": 1,
+            "EntropyCoef": 0.0003,
+            "EpsilonClip": 0.2,
+            "KL_threshold": 0.01,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "dtype": "torch.float32",
+          "Policy": "AC",
+          "Unimix_ratio": 0.01,
+          "ActorParamNum": 530450,
+          "CriticParamNum": 1444607
+        },
+        "WorldModel": {
+          "Act": "SiLU",
+          "Adam": {
+            "LearningRate": 0.0001
+          },
+          "Mamba": {
+            "n_layer": 2,
+            "ssm_cfg": {
+              "d_state": 16,
+              "is_mimo": false,
+              "mimo_rank": 4,
+              "chunk_size": 16
+            },
+            "d_intermediate": 0
+          },
+          "dtype": "torch.float32",
+          "Laprop": {
+            "Epsilon": 1e-20,
+            "LearningRate": 0.00004
+          },
+          "Reward": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Decoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ],
+            "FirstStrideOne": true,
+            "FinalLayerSigmoid": true
+          },
+          "Dropout": 0.1,
+          "Encoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ]
+          },
+          "Backbone": "Mamba2",
+          "ClassDim": 32,
+          "MacroLoss": {
+            "Cutout": {
+              "Ratio": [
+                0.3,
+                3.3
+              ],
+              "Scale": [
+                0.01,
+                0.05
+              ],
+              "Value": 0,
+              "Enable": false,
+              "NumMasks": 1,
+              "Probability": 0.3,
+              "DisableAfterStep": -1
+            },
+            "Enable": true,
+            "Margin": 0.92,
+            "DBCAlpha": 0.3,
+            "DiffType": "aux_value",
+            "HashBits": 10,
+            "LossScale": 10,
+            "UIDimRatio": 8,
+            "UIKLWeight": 1,
+            "LazyRebuild": {
+              "Enable": true,
+              "SampleMultiplier": 8,
+              "UseSimilarBuckets": true
+            },
+            "TriggerType": "aux_value_diff",
+            "LatentDropout": {
+              "Enable": true,
+              "Target": "critic",
+              "Probability": 0.2
+            },
+            "DistanceMetric": "margin",
+            "MaxPastSamples": 32,
+            "MaxQueuePerKey": 100000,
+            "SigmaThreshold": 2,
+            "RebuildCooldown": 3000,
+            "DisableAfterStep": 0,
+            "MaxPairsPerBatch": 256,
+            "RebuildBatchSize": 32768,
+            "RebuildThreshold": 0.45,
+            "StoreOnlyTriggered": false,
+            "EnableGlobalRebuild": true,
+            "ContrastiveSigmaRatio": 0.1,
+            "MaxRelativeThresholdDecay": 0.999,
+            "MaxRelativeThresholdRatio": 0.03,
+            "EnableMaxRelativeThreshold": true,
+            "IncludePrevFrameInMacroLoss": false
+          },
+          "Optimiser": "Laprop",
+          "InChannels": 3,
+          "Contrastive": {
+            "Steps": 5,
+            "Enable": false,
+            "Layers": 2,
+            "OutSize": 512,
+            "CropRatio": [
+              0.9,
+              1.1
+            ],
+            "CropScale": [
+              0.25,
+              1
+            ],
+            "ExpLambda": 0.75,
+            "LossScale": 0.01,
+            "HiddenSize": 512,
+            "MaxSamples": 1024,
+            "Temperature": 0.1
+          },
+          "Termination": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Transformer": {
+            "NumHeads": 8,
+            "NumLayers": 2,
+            "FinalFeatureWidth": 4
+          },
+          "RewardConcat": {
+            "Enable": false
+          },
+          "Unimix_ratio": 0.01,
+          "Warmup_steps": 1000,
+          "Weight_decay": 0.0001,
+          "Max_grad_norm": 1000,
+          "TotalParamNum": 22978341,
+          "CategoricalDim": 32,
+          "HiddenStateDim": 512,
+          "DecoderParamNum": 8667395,
+          "EncoderParamNum": 270720,
+          "BackboneParamNum": 3743648,
+          "LatentDiscreteType": "naive",
+          "DynamicsKLWeighting": {
+            "Enable": false,
+            "Weight": 3,
+            "TriggerThreshold": 1.5
+          },
+          "DynamicLossHarmonization": {
+            "Enable": false,
+            "WeightBeta": 0.9,
+            "HarmonizeBeta": 0.99,
+            "AuxTargetScale": 0.5,
+            "LossCategories": {
+              "reward": "sparse",
+              "dynamics": "core_dense",
+              "contrastive": "aux_dense",
+              "termination": "sparse",
+              "important_hash": "sparse",
+              "reconstruction": "core_dense",
+              "representation": "aux_dense",
+              "dyn_value_distill": "aux_dense"
+            },
+            "CoreTargetScale": 1
+          },
+          "DynamicsValueDistillation": {
+            "Enable": false,
+            "Weight": 0.1
+          },
+          "DiscretisationLayerParamNum": 8914944
+        }
+      }
+    },
+    "_wandb": {
+      "value": {
+        "m": [],
+        "t": {
+          "1": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "2": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "3": [
+            2,
+            13,
+            16,
+            17,
+            61
+          ],
+          "4": "3.11.15",
+          "5": "0.28.1",
+          "6": "5.14.1",
+          "8": [
+            2
+          ],
+          "12": "0.28.1",
+          "13": "linux-x86_64"
+        },
+        "visualize": {
+          "MacroLoss/bucket_sizes_bar": {
+            "panel_type": "Vega2",
+            "panel_config": {
+              "transform": {
+                "name": "tableWithLeafColNames"
+              },
+              "userQuery": {
+                "queryFields": [
+                  {
+                    "args": [
+                      {
+                        "name": "runSets",
+                        "value": "${runSets}"
+                      }
+                    ],
+                    "name": "runSets",
+                    "fields": [
+                      {
+                        "name": "id",
+                        "fields": []
+                      },
+                      {
+                        "name": "name",
+                        "fields": []
+                      },
+                      {
+                        "name": "_defaultColorIndex",
+                        "fields": []
+                      },
+                      {
+                        "args": [
+                          {
+                            "name": "tableKey",
+                            "value": "MacroLoss/bucket_sizes_bar_table"
+                          }
+                        ],
+                        "name": "summaryTable",
+                        "fields": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              "panelDefId": "wandb/bar/v0",
+              "fieldSettings": {
+                "label": "Bucket ID",
+                "value": "Item Count"
+              },
+              "stringSettings": {
+                "title": "Current Bucket Distribution"
+              }
+            }
+          }
+        },
+        "cli_version": "0.28.1",
+        "python_version": "3.11.15"
+      }
+    },
+    "Evaluate": {
+      "value": {
+        "NumEnvs": 10,
+        "EpisodeNum": 10,
+        "EverySteps": 2000,
+        "EvalStartStep": 9000,
+        "DuringTraining": true
+      }
+    },
+    "BasicSettings": {
+      "value": {
+        "Seed": 3710,
+        "Device": "cuda:0",
+        "Use_cg": false,
+        "Compile": false,
+        "Use_amp": true,
+        "Env_name": "ALE/Seaquest-v5",
+        "SavePath": "None",
+        "ImageSize": 64,
+        "ImageChannel": 3,
+        "ReplayBufferOnGPU": true
+      }
+    },
+    "Demonstration": {
+      "value": {
+        "Enable": true,
+        "MaxFiles": 1,
+        "Directory": "demonstrations",
+        "AgentDemoRatioEnd": 0.1,
+        "StrictActionCheck": true,
+        "AgentDemoRatioPeak": 0.1,
+        "DemoRatioDecayRate": 0.9,
+        "WorldModelDemoRatio": 0.1,
+        "AgentDemoRatioEndStep": 100000,
+        "AgentDemoRatioPeakStep": 6000,
+        "AgentDemoRatioStartStep": 5000,
+        "DemoRatioDecayThreshold": 0.1,
+        "DemoRatioDecayScoreMultiplier": 0.9
+      }
+    },
+    "JointTrainAgent": {
+      "value": {
+        "Tau": 10,
+        "Beta": 1,
+        "Alpha": 1,
+        "NumEnvs": 1,
+        "AuxGamma": 0.985,
+        "AuxLambda": 0.95,
+        "BatchSize": 32,
+        "SaveModels": true,
+        "BatchLength": 128,
+        "SkipPretrain": true,
+        "PBRSEndOffset": 105001,
+        "ImaginationTau": 10,
+        "SampleMaxSteps": 105000,
+        "SaveEverySteps": 2000,
+        "BehaviourWarmUp": 1984,
+        "BufferMaxLength": 100000,
+        "PBRSStartOffset": 105000,
+        "ImagineBatchSize": 1024,
+        "WorldModelWarmUp": 1984,
+        "SlowAuxValueDecay": 0.99,
+        "ImagineBatchLength": 16,
+        "TrainDynamicsEpoch": 1,
+        "ImagineContextLength": 8,
+        "RealityContextLength": 16,
+        "TrainAgentEverySteps": 1,
+        "TrainDynamicsEverySteps": 1,
+        "FreezeBehaviourAfterSteps": 100000,
+        "FreezeWorldModelAfterSteps": 100000
+      }
+    }
+  },
+  {
+    "n": {
+      "value": "standard"
+    },
+    "Wandb": {
+      "value": {
+        "Init": {
+          "Mode": "online",
+          "Project": "Mamba_dreamer_v2"
+        }
+      }
+    },
+    "Models": {
+      "value": {
+        "Agent": {
+          "AC": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 11,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "EntropyCoef": 0.0005,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100,
+            "EnableCriticProbe": true
+          },
+          "PPO": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 10,
+            "K_epochs": 3,
+            "Minibatch": 16384,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "CriticCoef": 1,
+            "EntropyCoef": 0.0003,
+            "EpsilonClip": 0.2,
+            "KL_threshold": 0.01,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "dtype": "torch.float32",
+          "Policy": "AC",
+          "Unimix_ratio": 0.01,
+          "ActorParamNum": 530450,
+          "CriticParamNum": 1444607
+        },
+        "WorldModel": {
+          "Act": "SiLU",
+          "Adam": {
+            "LearningRate": 0.0001
+          },
+          "Mamba": {
+            "n_layer": 2,
+            "ssm_cfg": {
+              "d_state": 16,
+              "is_mimo": false,
+              "mimo_rank": 4,
+              "chunk_size": 16
+            },
+            "d_intermediate": 0
+          },
+          "dtype": "torch.float32",
+          "Laprop": {
+            "Epsilon": 1e-20,
+            "LearningRate": 0.00004
+          },
+          "Reward": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Decoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ],
+            "FirstStrideOne": true,
+            "FinalLayerSigmoid": true
+          },
+          "Dropout": 0.1,
+          "Encoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ]
+          },
+          "Backbone": "Mamba2",
+          "ClassDim": 32,
+          "MacroLoss": {
+            "Cutout": {
+              "Ratio": [
+                0.3,
+                3.3
+              ],
+              "Scale": [
+                0.01,
+                0.05
+              ],
+              "Value": 0,
+              "Enable": false,
+              "NumMasks": 1,
+              "Probability": 0.3,
+              "DisableAfterStep": -1
+            },
+            "Enable": true,
+            "Margin": 0.92,
+            "DBCAlpha": 0.3,
+            "DiffType": "aux_value",
+            "HashBits": 10,
+            "LossScale": 10,
+            "UIDimRatio": 8,
+            "UIKLWeight": 1,
+            "LazyRebuild": {
+              "Enable": true,
+              "SampleMultiplier": 8,
+              "UseSimilarBuckets": true
+            },
+            "TriggerType": "aux_value_diff",
+            "LatentDropout": {
+              "Enable": true,
+              "Target": "critic",
+              "Probability": 0.2
+            },
+            "DistanceMetric": "margin",
+            "MaxPastSamples": 32,
+            "MaxQueuePerKey": 100000,
+            "SigmaThreshold": 2,
+            "RebuildCooldown": 3000,
+            "DisableAfterStep": 0,
+            "MaxPairsPerBatch": 256,
+            "RebuildBatchSize": 32768,
+            "RebuildThreshold": 0.45,
+            "StoreOnlyTriggered": false,
+            "EnableGlobalRebuild": true,
+            "ContrastiveSigmaRatio": 0.1,
+            "MaxRelativeThresholdDecay": 0.999,
+            "MaxRelativeThresholdRatio": 0.03,
+            "EnableMaxRelativeThreshold": true,
+            "IncludePrevFrameInMacroLoss": false
+          },
+          "Optimiser": "Laprop",
+          "InChannels": 3,
+          "Contrastive": {
+            "Steps": 5,
+            "Enable": false,
+            "Layers": 2,
+            "OutSize": 512,
+            "CropRatio": [
+              0.9,
+              1.1
+            ],
+            "CropScale": [
+              0.25,
+              1
+            ],
+            "ExpLambda": 0.75,
+            "LossScale": 0.01,
+            "HiddenSize": 512,
+            "MaxSamples": 1024,
+            "Temperature": 0.1
+          },
+          "Termination": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Transformer": {
+            "NumHeads": 8,
+            "NumLayers": 2,
+            "FinalFeatureWidth": 4
+          },
+          "RewardConcat": {
+            "Enable": false
+          },
+          "Unimix_ratio": 0.01,
+          "Warmup_steps": 1000,
+          "Weight_decay": 0.0001,
+          "Max_grad_norm": 1000,
+          "TotalParamNum": 22978341,
+          "CategoricalDim": 32,
+          "HiddenStateDim": 512,
+          "DecoderParamNum": 8667395,
+          "EncoderParamNum": 270720,
+          "BackboneParamNum": 3743648,
+          "LatentDiscreteType": "naive",
+          "DynamicsKLWeighting": {
+            "Enable": false,
+            "Weight": 3,
+            "TriggerThreshold": 1.5
+          },
+          "DynamicLossHarmonization": {
+            "Enable": false,
+            "WeightBeta": 0.9,
+            "HarmonizeBeta": 0.99,
+            "AuxTargetScale": 0.5,
+            "LossCategories": {
+              "reward": "sparse",
+              "dynamics": "core_dense",
+              "contrastive": "aux_dense",
+              "termination": "sparse",
+              "important_hash": "sparse",
+              "reconstruction": "core_dense",
+              "representation": "aux_dense",
+              "dyn_value_distill": "aux_dense"
+            },
+            "CoreTargetScale": 1
+          },
+          "DynamicsValueDistillation": {
+            "Enable": false,
+            "Weight": 0.1
+          },
+          "DiscretisationLayerParamNum": 8914944
+        }
+      }
+    },
+    "_wandb": {
+      "value": {
+        "m": [],
+        "t": {
+          "1": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "2": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "3": [
+            13,
+            16,
+            17,
+            41,
+            61
+          ],
+          "4": "3.11.11",
+          "5": "0.26.0",
+          "6": "4.41.2",
+          "12": "0.26.0",
+          "13": "linux-x86_64"
+        },
+        "visualize": {
+          "MacroLoss/bucket_sizes_bar": {
+            "panel_type": "Vega2",
+            "panel_config": {
+              "transform": {
+                "name": "tableWithLeafColNames"
+              },
+              "userQuery": {
+                "queryFields": [
+                  {
+                    "args": [
+                      {
+                        "name": "runSets",
+                        "value": "${runSets}"
+                      }
+                    ],
+                    "name": "runSets",
+                    "fields": [
+                      {
+                        "name": "id",
+                        "fields": []
+                      },
+                      {
+                        "name": "name",
+                        "fields": []
+                      },
+                      {
+                        "name": "_defaultColorIndex",
+                        "fields": []
+                      },
+                      {
+                        "args": [
+                          {
+                            "name": "tableKey",
+                            "value": "MacroLoss/bucket_sizes_bar_table"
+                          }
+                        ],
+                        "name": "summaryTable",
+                        "fields": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              "panelDefId": "wandb/bar/v0",
+              "fieldSettings": {
+                "label": "Bucket ID",
+                "value": "Item Count"
+              },
+              "stringSettings": {
+                "title": "Current Bucket Distribution"
+              }
+            }
+          }
+        },
+        "cli_version": "0.26.0",
+        "python_version": "3.11.11"
+      }
+    },
+    "Evaluate": {
+      "value": {
+        "NumEnvs": 10,
+        "EpisodeNum": 10,
+        "EverySteps": 2000,
+        "EvalStartStep": 9000,
+        "DuringTraining": true
+      }
+    },
+    "BasicSettings": {
+      "value": {
+        "Seed": 3710,
+        "Device": "cuda:0",
+        "Use_cg": false,
+        "Compile": false,
+        "Use_amp": true,
+        "Env_name": "ALE/Seaquest-v5",
+        "SavePath": "None",
+        "ImageSize": 64,
+        "ImageChannel": 3,
+        "ReplayBufferOnGPU": true
+      }
+    },
+    "Demonstration": {
+      "value": {
+        "Enable": true,
+        "MaxFiles": 1,
+        "Directory": "demonstrations",
+        "AgentDemoRatioEnd": 0.1,
+        "StrictActionCheck": true,
+        "AgentDemoRatioPeak": 0.1,
+        "DemoRatioDecayRate": 0.9,
+        "WorldModelDemoRatio": 0.1,
+        "AgentDemoRatioEndStep": 100000,
+        "AgentDemoRatioPeakStep": 6000,
+        "AgentDemoRatioStartStep": 5000,
+        "DemoRatioDecayThreshold": 0.1,
+        "DemoRatioDecayScoreMultiplier": 0.9
+      }
+    },
+    "JointTrainAgent": {
+      "value": {
+        "Tau": 10,
+        "Beta": 1,
+        "Alpha": 1,
+        "NumEnvs": 1,
+        "AuxGamma": 0.985,
+        "AuxLambda": 0.95,
+        "BatchSize": 32,
+        "SaveModels": true,
+        "BatchLength": 128,
+        "SkipPretrain": true,
+        "PBRSEndOffset": 105001,
+        "ImaginationTau": 10,
+        "SampleMaxSteps": 105000,
+        "SaveEverySteps": 2000,
+        "BehaviourWarmUp": 1984,
+        "BufferMaxLength": 100000,
+        "PBRSStartOffset": 105000,
+        "ImagineBatchSize": 1024,
+        "WorldModelWarmUp": 1984,
+        "SlowAuxValueDecay": 0.99,
+        "ImagineBatchLength": 16,
+        "TrainDynamicsEpoch": 1,
+        "ImagineContextLength": 8,
+        "RealityContextLength": 16,
+        "TrainAgentEverySteps": 1,
+        "TrainDynamicsEverySteps": 1,
+        "FreezeBehaviourAfterSteps": 100000,
+        "FreezeWorldModelAfterSteps": 100000
+      }
+    }
+  },
+  {
+    "n": {
+      "value": "standard"
+    },
+    "Wandb": {
+      "value": {
+        "Init": {
+          "Mode": "online",
+          "Project": "Mamba_dreamer_v2"
+        }
+      }
+    },
+    "Models": {
+      "value": {
+        "Agent": {
+          "AC": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 11,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "EntropyCoef": 0.0005,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "PPO": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 10,
+            "K_epochs": 3,
+            "Minibatch": 16384,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "CriticCoef": 1,
+            "EntropyCoef": 0.0003,
+            "EpsilonClip": 0.2,
+            "KL_threshold": 0.01,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "dtype": "torch.float32",
+          "Policy": "AC",
+          "Unimix_ratio": 0.01,
+          "ActorParamNum": 530450,
+          "CriticParamNum": 1444607
+        },
+        "WorldModel": {
+          "Act": "SiLU",
+          "Adam": {
+            "LearningRate": 0.0001
+          },
+          "Mamba": {
+            "n_layer": 2,
+            "ssm_cfg": {
+              "d_state": 16,
+              "is_mimo": false,
+              "mimo_rank": 4,
+              "chunk_size": 16
+            },
+            "d_intermediate": 0
+          },
+          "dtype": "torch.float32",
+          "Laprop": {
+            "Epsilon": 1e-20,
+            "LearningRate": 0.00004
+          },
+          "Reward": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Decoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ],
+            "FirstStrideOne": true,
+            "FinalLayerSigmoid": true
+          },
+          "Dropout": 0.1,
+          "Encoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ]
+          },
+          "Backbone": "Mamba2",
+          "ClassDim": 32,
+          "Optimiser": "Laprop",
+          "InChannels": 3,
+          "Contrastive": {
+            "Steps": 5,
+            "Enable": false,
+            "Layers": 2,
+            "OutSize": 512,
+            "CropRatio": [
+              0.9,
+              1.1
+            ],
+            "CropScale": [
+              0.25,
+              1
+            ],
+            "ExpLambda": 0.75,
+            "LossScale": 0.01,
+            "HiddenSize": 512,
+            "MaxSamples": 1024,
+            "Temperature": 0.1
+          },
+          "Termination": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Transformer": {
+            "NumHeads": 8,
+            "NumLayers": 2,
+            "FinalFeatureWidth": 4
+          },
+          "RewardConcat": {
+            "Enable": false
+          },
+          "Unimix_ratio": 0.01,
+          "Warmup_steps": 1000,
+          "Weight_decay": 0.0001,
+          "Max_grad_norm": 1000,
+          "TotalParamNum": 22978341,
+          "CategoricalDim": 32,
+          "HiddenStateDim": 512,
+          "DecoderParamNum": 8667395,
+          "EncoderParamNum": 270720,
+          "BackboneParamNum": 3743648,
+          "LatentDiscreteType": "naive",
+          "DynamicsKLWeighting": {
+            "Enable": false,
+            "Weight": 3,
+            "TriggerThreshold": 1.5
+          },
+          "ImportantInfoHashLoss": {
+            "Cutout": {
+              "Ratio": [
+                0.3,
+                3.3
+              ],
+              "Scale": [
+                0.01,
+                0.05
+              ],
+              "Value": 0,
+              "Enable": false,
+              "NumMasks": 1,
+              "Probability": 0.3,
+              "DisableAfterStep": -1
+            },
+            "Enable": true,
+            "Margin": 0.92,
+            "DiffType": "aux_value",
+            "HashBits": 10,
+            "LossScale": 10,
+            "UIDimRatio": 8,
+            "UIKLWeight": 1,
+            "LazyRebuild": {
+              "Enable": true,
+              "SampleMultiplier": 8,
+              "UseSimilarBuckets": true
+            },
+            "TriggerType": "aux_value_diff",
+            "LatentDropout": {
+              "Enable": true,
+              "Target": "critic",
+              "Probability": 0.2
+            },
+            "MaxPastSamples": 32,
+            "MaxQueuePerKey": 100000,
+            "SigmaThreshold": 2,
+            "RebuildCooldown": 3000,
+            "DisableAfterStep": 0,
+            "MaxPairsPerBatch": 256,
+            "RebuildBatchSize": 32768,
+            "RebuildThreshold": 0.45,
+            "StoreOnlyTriggered": false,
+            "EnableGlobalRebuild": true,
+            "ContrastiveSigmaRatio": 0.1,
+            "MaxRelativeThresholdDecay": 0.999,
+            "MaxRelativeThresholdRatio": 0.03,
+            "EnableMaxRelativeThreshold": true,
+            "IncludePrevFrameInHashLoss": false
+          },
+          "DynamicLossHarmonization": {
+            "Enable": false,
+            "WeightBeta": 0.9,
+            "HarmonizeBeta": 0.99,
+            "AuxTargetScale": 0.5,
+            "LossCategories": {
+              "reward": "sparse",
+              "dynamics": "core_dense",
+              "contrastive": "aux_dense",
+              "termination": "sparse",
+              "important_hash": "sparse",
+              "reconstruction": "core_dense",
+              "representation": "aux_dense",
+              "dyn_value_distill": "aux_dense"
+            },
+            "CoreTargetScale": 1
+          },
+          "DynamicsValueDistillation": {
+            "Enable": false,
+            "Weight": 0.1
+          },
+          "DiscretisationLayerParamNum": 8914944
+        }
+      }
+    },
+    "_wandb": {
+      "value": {
+        "m": [],
+        "t": {
+          "1": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "2": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "3": [
+            2,
+            13,
+            16,
+            17,
+            61
+          ],
+          "4": "3.11.11",
+          "5": "0.26.0",
+          "6": "4.41.2",
+          "12": "0.26.0",
+          "13": "linux-x86_64"
+        },
+        "visualize": {
+          "ImportantInfoHashLoss/bucket_sizes_bar": {
+            "panel_type": "Vega2",
+            "panel_config": {
+              "transform": {
+                "name": "tableWithLeafColNames"
+              },
+              "userQuery": {
+                "queryFields": [
+                  {
+                    "args": [
+                      {
+                        "name": "runSets",
+                        "value": "${runSets}"
+                      }
+                    ],
+                    "name": "runSets",
+                    "fields": [
+                      {
+                        "name": "id",
+                        "fields": []
+                      },
+                      {
+                        "name": "name",
+                        "fields": []
+                      },
+                      {
+                        "name": "_defaultColorIndex",
+                        "fields": []
+                      },
+                      {
+                        "args": [
+                          {
+                            "name": "tableKey",
+                            "value": "ImportantInfoHashLoss/bucket_sizes_bar_table"
+                          }
+                        ],
+                        "name": "summaryTable",
+                        "fields": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              "panelDefId": "wandb/bar/v0",
+              "fieldSettings": {
+                "label": "Bucket ID",
+                "value": "Item Count"
+              },
+              "stringSettings": {
+                "title": "Current Bucket Distribution"
+              }
+            }
+          }
+        },
+        "cli_version": "0.26.0",
+        "python_version": "3.11.11"
+      }
+    },
+    "Evaluate": {
+      "value": {
+        "NumEnvs": 10,
+        "EpisodeNum": 10,
+        "EverySteps": 2000,
+        "EvalStartStep": 9000,
+        "DuringTraining": true
+      }
+    },
+    "BasicSettings": {
+      "value": {
+        "Seed": 3710,
+        "Device": "cuda:0",
+        "Use_cg": false,
+        "Compile": false,
+        "Use_amp": true,
+        "Env_name": "ALE/Seaquest-v5",
+        "SavePath": "None",
+        "ImageSize": 64,
+        "ImageChannel": 3,
+        "ReplayBufferOnGPU": true
+      }
+    },
+    "Demonstration": {
+      "value": {
+        "Enable": true,
+        "MaxFiles": 1,
+        "Directory": "demonstrations",
+        "AgentDemoRatioEnd": 0.1,
+        "StrictActionCheck": true,
+        "AgentDemoRatioPeak": 0.1,
+        "DemoRatioDecayRate": 0.95,
+        "WorldModelDemoRatio": 0.1,
+        "AgentDemoRatioEndStep": 100000,
+        "AgentDemoRatioPeakStep": 6000,
+        "AgentDemoRatioStartStep": 5000,
+        "DemoRatioDecayThreshold": 0.1,
+        "DemoRatioDecayScoreMultiplier": 0.1
+      }
+    },
+    "JointTrainAgent": {
+      "value": {
+        "Tau": 10,
+        "Beta": 1,
+        "Alpha": 1,
+        "NumEnvs": 1,
+        "AuxGamma": 0.985,
+        "AuxLambda": 0.95,
+        "BatchSize": 32,
+        "SaveModels": true,
+        "BatchLength": 128,
+        "SkipPretrain": true,
+        "PBRSEndOffset": 105001,
+        "ImaginationTau": 10,
+        "SampleMaxSteps": 105000,
+        "SaveEverySteps": 2000,
+        "BehaviourWarmUp": 3968,
+        "BufferMaxLength": 100000,
+        "PBRSStartOffset": 105000,
+        "ImagineBatchSize": 1024,
+        "WorldModelWarmUp": 3968,
+        "SlowAuxValueDecay": 0.99,
+        "ImagineBatchLength": 16,
+        "TrainDynamicsEpoch": 1,
+        "ImagineContextLength": 8,
+        "RealityContextLength": 16,
+        "TrainAgentEverySteps": 1,
+        "TrainDynamicsEverySteps": 1,
+        "FreezeBehaviourAfterSteps": 100000,
+        "FreezeWorldModelAfterSteps": 100000
+      }
+    }
+  },
+  {
+    "n": {
+      "value": "standard"
+    },
+    "Wandb": {
+      "value": {
+        "Init": {
+          "Mode": "online",
+          "Project": "Mamba_dreamer_v2"
+        }
+      }
+    },
+    "Models": {
+      "value": {
+        "Agent": {
+          "AC": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 11,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "EntropyCoef": 0.0005,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "PPO": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 10,
+            "K_epochs": 3,
+            "Minibatch": 16384,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "CriticCoef": 1,
+            "EntropyCoef": 0.0003,
+            "EpsilonClip": 0.2,
+            "KL_threshold": 0.01,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "dtype": "torch.float32",
+          "Policy": "AC",
+          "Unimix_ratio": 0.01,
+          "ActorParamNum": 530450,
+          "CriticParamNum": 1444607
+        },
+        "WorldModel": {
+          "Act": "SiLU",
+          "Adam": {
+            "LearningRate": 0.0001
+          },
+          "Mamba": {
+            "n_layer": 2,
+            "ssm_cfg": {
+              "d_state": 16,
+              "is_mimo": false,
+              "mimo_rank": 4,
+              "chunk_size": 16
+            },
+            "d_intermediate": 0
+          },
+          "dtype": "torch.float32",
+          "Laprop": {
+            "Epsilon": 1e-20,
+            "LearningRate": 0.00004
+          },
+          "Reward": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Decoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ],
+            "FirstStrideOne": true,
+            "FinalLayerSigmoid": true
+          },
+          "Dropout": 0.1,
+          "Encoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ]
+          },
+          "Backbone": "Mamba2",
+          "ClassDim": 32,
+          "Optimiser": "Laprop",
+          "InChannels": 3,
+          "Contrastive": {
+            "Steps": 5,
+            "Enable": false,
+            "Layers": 2,
+            "OutSize": 512,
+            "CropRatio": [
+              0.9,
+              1.1
+            ],
+            "CropScale": [
+              0.25,
+              1
+            ],
+            "ExpLambda": 0.75,
+            "LossScale": 0.01,
+            "HiddenSize": 512,
+            "MaxSamples": 1024,
+            "Temperature": 0.1
+          },
+          "Termination": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Transformer": {
+            "NumHeads": 8,
+            "NumLayers": 2,
+            "FinalFeatureWidth": 4
+          },
+          "RewardConcat": {
+            "Enable": false
+          },
+          "Unimix_ratio": 0.01,
+          "Warmup_steps": 1000,
+          "Weight_decay": 0.0001,
+          "Max_grad_norm": 1000,
+          "TotalParamNum": 22978341,
+          "CategoricalDim": 32,
+          "HiddenStateDim": 512,
+          "DecoderParamNum": 8667395,
+          "EncoderParamNum": 270720,
+          "BackboneParamNum": 3743648,
+          "LatentDiscreteType": "naive",
+          "DynamicsKLWeighting": {
+            "Enable": false,
+            "Weight": 3,
+            "TriggerThreshold": 1.5
+          },
+          "ImportantInfoHashLoss": {
+            "Cutout": {
+              "Ratio": [
+                0.3,
+                3.3
+              ],
+              "Scale": [
+                0.01,
+                0.05
+              ],
+              "Value": 0,
+              "Enable": false,
+              "NumMasks": 1,
+              "Probability": 0.3,
+              "DisableAfterStep": -1
+            },
+            "Enable": true,
+            "Margin": 0.92,
+            "DiffType": "aux_value",
+            "HashBits": 10,
+            "LossScale": 10,
+            "UIDimRatio": 8,
+            "UIKLWeight": 1,
+            "LazyRebuild": {
+              "Enable": true,
+              "SampleMultiplier": 8,
+              "UseSimilarBuckets": true
+            },
+            "TriggerType": "aux_value_diff",
+            "LatentDropout": {
+              "Enable": true,
+              "Target": "critic",
+              "Probability": 0.2
+            },
+            "MaxPastSamples": 32,
+            "MaxQueuePerKey": 100000,
+            "SigmaThreshold": 2,
+            "RebuildCooldown": 3000,
+            "DisableAfterStep": 0,
+            "MaxPairsPerBatch": 256,
+            "RebuildBatchSize": 32768,
+            "RebuildThreshold": 0.45,
+            "StoreOnlyTriggered": false,
+            "EnableGlobalRebuild": true,
+            "ContrastiveSigmaRatio": 0.1,
+            "MaxRelativeThresholdDecay": 0.999,
+            "MaxRelativeThresholdRatio": 0.03,
+            "EnableMaxRelativeThreshold": true,
+            "IncludePrevFrameInHashLoss": false
+          },
+          "DynamicLossHarmonization": {
+            "Enable": false,
+            "WeightBeta": 0.9,
+            "HarmonizeBeta": 0.99,
+            "AuxTargetScale": 0.5,
+            "LossCategories": {
+              "reward": "sparse",
+              "dynamics": "core_dense",
+              "contrastive": "aux_dense",
+              "termination": "sparse",
+              "important_hash": "sparse",
+              "reconstruction": "core_dense",
+              "representation": "aux_dense",
+              "dyn_value_distill": "aux_dense"
+            },
+            "CoreTargetScale": 1
+          },
+          "DynamicsValueDistillation": {
+            "Enable": false,
+            "Weight": 0.1
+          },
+          "DiscretisationLayerParamNum": 8914944
+        }
+      }
+    },
+    "_wandb": {
+      "value": {
+        "m": [],
+        "t": {
+          "1": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "2": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "3": [
+            2,
+            13,
+            16,
+            17,
+            61
+          ],
+          "4": "3.11.11",
+          "5": "0.26.0",
+          "6": "4.41.2",
+          "12": "0.26.0",
+          "13": "linux-x86_64"
+        },
+        "visualize": {
+          "ImportantInfoHashLoss/bucket_sizes_bar": {
+            "panel_type": "Vega2",
+            "panel_config": {
+              "transform": {
+                "name": "tableWithLeafColNames"
+              },
+              "userQuery": {
+                "queryFields": [
+                  {
+                    "args": [
+                      {
+                        "name": "runSets",
+                        "value": "${runSets}"
+                      }
+                    ],
+                    "name": "runSets",
+                    "fields": [
+                      {
+                        "name": "id",
+                        "fields": []
+                      },
+                      {
+                        "name": "name",
+                        "fields": []
+                      },
+                      {
+                        "name": "_defaultColorIndex",
+                        "fields": []
+                      },
+                      {
+                        "args": [
+                          {
+                            "name": "tableKey",
+                            "value": "ImportantInfoHashLoss/bucket_sizes_bar_table"
+                          }
+                        ],
+                        "name": "summaryTable",
+                        "fields": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              "panelDefId": "wandb/bar/v0",
+              "fieldSettings": {
+                "label": "Bucket ID",
+                "value": "Item Count"
+              },
+              "stringSettings": {
+                "title": "Current Bucket Distribution"
+              }
+            }
+          }
+        },
+        "cli_version": "0.26.0",
+        "python_version": "3.11.11"
+      }
+    },
+    "Evaluate": {
+      "value": {
+        "NumEnvs": 10,
+        "EpisodeNum": 10,
+        "EverySteps": 2000,
+        "EvalStartStep": 9000,
+        "DuringTraining": true
+      }
+    },
+    "BasicSettings": {
+      "value": {
+        "Seed": 3710,
+        "Device": "cuda:0",
+        "Use_cg": false,
+        "Compile": false,
+        "Use_amp": true,
+        "Env_name": "ALE/Seaquest-v5",
+        "SavePath": "None",
+        "ImageSize": 64,
+        "ImageChannel": 3,
+        "ReplayBufferOnGPU": true
+      }
+    },
+    "Demonstration": {
+      "value": {
+        "Enable": true,
+        "MaxFiles": 1,
+        "Directory": "demonstrations",
+        "AgentDemoRatioEnd": 0.1,
+        "StrictActionCheck": true,
+        "AgentDemoRatioPeak": 0.1,
+        "DemoRatioDecayRate": 0.95,
+        "WorldModelDemoRatio": 0.1,
+        "AgentDemoRatioEndStep": 100000,
+        "AgentDemoRatioPeakStep": 6000,
+        "AgentDemoRatioStartStep": 5000,
+        "DemoRatioDecayThreshold": 0.1,
+        "DemoRatioDecayScoreMultiplier": 0.1
+      }
+    },
+    "JointTrainAgent": {
+      "value": {
+        "Tau": 10,
+        "Beta": 1,
+        "Alpha": 1,
+        "NumEnvs": 1,
+        "AuxGamma": 0.985,
+        "AuxLambda": 0.95,
+        "BatchSize": 32,
+        "SaveModels": true,
+        "BatchLength": 128,
+        "SkipPretrain": true,
+        "PBRSEndOffset": 105001,
+        "ImaginationTau": 10,
+        "SampleMaxSteps": 105000,
+        "SaveEverySteps": 2000,
+        "BehaviourWarmUp": 3968,
+        "BufferMaxLength": 100000,
+        "PBRSStartOffset": 105000,
+        "ImagineBatchSize": 1024,
+        "WorldModelWarmUp": 3968,
+        "SlowAuxValueDecay": 0.99,
+        "ImagineBatchLength": 16,
+        "TrainDynamicsEpoch": 1,
+        "ImagineContextLength": 8,
+        "RealityContextLength": 16,
+        "TrainAgentEverySteps": 1,
+        "TrainDynamicsEverySteps": 1,
+        "FreezeBehaviourAfterSteps": 100000,
+        "FreezeWorldModelAfterSteps": 100000
+      }
+    }
+  },
+  {
+    "n": {
+      "value": "standard"
+    },
+    "Wandb": {
+      "value": {
+        "Init": {
+          "Mode": "online",
+          "Project": "Mamba_dreamer_v2"
+        }
+      }
+    },
+    "Models": {
+      "value": {
+        "Agent": {
+          "AC": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 11,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "EntropyCoef": 0.0005,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "PPO": {
+            "Act": "SiLU",
+            "Adam": {
+              "Epsilon": 0.00001,
+              "LearningRate": 0.00003
+            },
+            "Actor": {
+              "HiddenUnits": 256
+            },
+            "Gamma": 0.985,
+            "Critic": {
+              "HiddenUnits": 512
+            },
+            "Lambda": 0.95,
+            "Laprop": {
+              "Epsilon": 1e-20,
+              "LearningRate": 0.00004
+            },
+            "BCWeight": 10,
+            "K_epochs": 3,
+            "Minibatch": 16384,
+            "NumLayers": 3,
+            "Optimiser": "Laprop",
+            "CriticCoef": 1,
+            "EntropyCoef": 0.0003,
+            "EpsilonClip": 0.2,
+            "KL_threshold": 0.01,
+            "Warmup_steps": 1000,
+            "Max_grad_norm": 100
+          },
+          "dtype": "torch.float32",
+          "Policy": "AC",
+          "Unimix_ratio": 0.01,
+          "ActorParamNum": 530450,
+          "CriticParamNum": 1444607
+        },
+        "WorldModel": {
+          "Act": "SiLU",
+          "Adam": {
+            "LearningRate": 0.0001
+          },
+          "Mamba": {
+            "n_layer": 2,
+            "ssm_cfg": {
+              "d_state": 16,
+              "is_mimo": false,
+              "mimo_rank": 4,
+              "chunk_size": 16
+            },
+            "d_intermediate": 0
+          },
+          "dtype": "torch.float32",
+          "Laprop": {
+            "Epsilon": 1e-20,
+            "LearningRate": 0.00004
+          },
+          "Reward": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Decoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ],
+            "FirstStrideOne": true,
+            "FinalLayerSigmoid": true
+          },
+          "Dropout": 0.1,
+          "Encoder": {
+            "Norm": "rms",
+            "Depth": 16,
+            "Mults": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "Kernel": 5,
+            "Padding": "same",
+            "InputSize": [
+              3,
+              64,
+              64
+            ]
+          },
+          "Backbone": "Mamba2",
+          "ClassDim": 32,
+          "Optimiser": "Laprop",
+          "InChannels": 3,
+          "Contrastive": {
+            "Steps": 5,
+            "Enable": false,
+            "Layers": 2,
+            "OutSize": 512,
+            "CropRatio": [
+              0.9,
+              1.1
+            ],
+            "CropScale": [
+              0.25,
+              1
+            ],
+            "ExpLambda": 0.75,
+            "LossScale": 0.01,
+            "HiddenSize": 512,
+            "MaxSamples": 1024,
+            "Temperature": 0.1
+          },
+          "Termination": {
+            "LayerNum": 1,
+            "HiddenUnits": 256
+          },
+          "Transformer": {
+            "NumHeads": 8,
+            "NumLayers": 2,
+            "FinalFeatureWidth": 4
+          },
+          "RewardConcat": {
+            "Enable": false
+          },
+          "Unimix_ratio": 0.01,
+          "Warmup_steps": 1000,
+          "Weight_decay": 0.0001,
+          "Max_grad_norm": 1000,
+          "TotalParamNum": 22978341,
+          "CategoricalDim": 32,
+          "HiddenStateDim": 512,
+          "DecoderParamNum": 8667395,
+          "EncoderParamNum": 270720,
+          "BackboneParamNum": 3743648,
+          "LatentDiscreteType": "naive",
+          "DynamicsKLWeighting": {
+            "Enable": false,
+            "Weight": 3,
+            "TriggerThreshold": 1.5
+          },
+          "ImportantInfoHashLoss": {
+            "Cutout": {
+              "Ratio": [
+                0.3,
+                3.3
+              ],
+              "Scale": [
+                0.01,
+                0.05
+              ],
+              "Value": 0,
+              "Enable": false,
+              "NumMasks": 1,
+              "Probability": 0.3,
+              "DisableAfterStep": -1
+            },
+            "Enable": true,
+            "Margin": 0.92,
+            "DiffType": "aux_value",
+            "HashBits": 10,
+            "LossScale": 10,
+            "UIDimRatio": 8,
+            "UIKLWeight": 1,
+            "LazyRebuild": {
+              "Enable": true,
+              "SampleMultiplier": 8,
+              "UseSimilarBuckets": true
+            },
+            "TriggerType": "aux_value_diff",
+            "LatentDropout": {
+              "Enable": true,
+              "Probability": 0.2
+            },
+            "MaxPastSamples": 32,
+            "MaxQueuePerKey": 100000,
+            "SigmaThreshold": 2,
+            "RebuildCooldown": 5000,
+            "DisableAfterStep": 0,
+            "MaxPairsPerBatch": 256,
+            "RebuildBatchSize": 32768,
+            "RebuildThreshold": 0.5,
+            "StoreOnlyTriggered": false,
+            "EnableGlobalRebuild": true,
+            "ContrastiveSigmaRatio": 0.1,
+            "MaxRelativeThresholdDecay": 0.999,
+            "MaxRelativeThresholdRatio": 0.03,
+            "EnableMaxRelativeThreshold": true,
+            "IncludePrevFrameInHashLoss": false
+          },
+          "DynamicLossHarmonization": {
+            "Enable": false,
+            "WeightBeta": 0.9,
+            "HarmonizeBeta": 0.99,
+            "AuxTargetScale": 0.5,
+            "LossCategories": {
+              "reward": "sparse",
+              "dynamics": "core_dense",
+              "contrastive": "aux_dense",
+              "termination": "sparse",
+              "important_hash": "sparse",
+              "reconstruction": "core_dense",
+              "representation": "aux_dense",
+              "dyn_value_distill": "aux_dense"
+            },
+            "CoreTargetScale": 1
+          },
+          "DynamicsValueDistillation": {
+            "Enable": false,
+            "Weight": 0.1
+          },
+          "DiscretisationLayerParamNum": 8914944
+        }
+      }
+    },
+    "_wandb": {
+      "value": {
+        "m": [],
+        "t": {
+          "1": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "2": [
+            1,
+            11,
+            49,
+            51,
+            79
+          ],
+          "3": [
+            2,
+            13,
+            16,
+            17,
+            61
+          ],
+          "4": "3.11.11",
+          "5": "0.26.0",
+          "6": "4.41.2",
+          "12": "0.26.0",
+          "13": "linux-x86_64"
+        },
+        "cli_version": "0.26.0",
+        "python_version": "3.11.11"
+      }
+    },
+    "Evaluate": {
+      "value": {
+        "NumEnvs": 10,
+        "EpisodeNum": 10,
+        "EverySteps": 2000,
+        "EvalStartStep": 9000,
+        "DuringTraining": true
+      }
+    },
+    "BasicSettings": {
+      "value": {
+        "Seed": 3710,
+        "Device": "cuda:0",
+        "Use_cg": false,
+        "Compile": false,
+        "Use_amp": true,
+        "Env_name": "ALE/Seaquest-v5",
+        "SavePath": "None",
+        "ImageSize": 64,
+        "ImageChannel": 3,
+        "ReplayBufferOnGPU": true
+      }
+    },
+    "Demonstration": {
+      "value": {
+        "Enable": true,
+        "MaxFiles": 1,
+        "Directory": "demonstrations",
+        "AgentDemoRatioEnd": 0.1,
+        "StrictActionCheck": true,
+        "AgentDemoRatioPeak": 0.1,
+        "DemoRatioDecayRate": 0.95,
+        "WorldModelDemoRatio": 0.1,
+        "AgentDemoRatioEndStep": 100000,
+        "AgentDemoRatioPeakStep": 6000,
+        "AgentDemoRatioStartStep": 5000,
+        "DemoRatioDecayThreshold": 0.1,
+        "DemoRatioDecayScoreMultiplier": 0.1
+      }
+    },
+    "JointTrainAgent": {
+      "value": {
+        "Tau": 10,
+        "Beta": 1,
+        "Alpha": 1,
+        "NumEnvs": 1,
+        "AuxGamma": 0.985,
+        "AuxLambda": 0.95,
+        "BatchSize": 32,
+        "SaveModels": true,
+        "BatchLength": 128,
+        "SkipPretrain": true,
+        "PBRSEndOffset": 18000,
+        "ImaginationTau": 10,
+        "SampleMaxSteps": 105000,
+        "SaveEverySteps": 2000,
+        "BehaviourWarmUp": 3968,
+        "BufferMaxLength": 100000,
+        "PBRSStartOffset": 10000,
+        "ImagineBatchSize": 1024,
+        "WorldModelWarmUp": 3968,
+        "SlowAuxValueDecay": 0.99,
+        "ImagineBatchLength": 16,
+        "TrainDynamicsEpoch": 1,
+        "ImagineContextLength": 8,
+        "RealityContextLength": 16,
+        "TrainAgentEverySteps": 1,
+        "TrainDynamicsEverySteps": 1,
+        "FreezeBehaviourAfterSteps": 100000,
+        "FreezeWorldModelAfterSteps": 100000
+      }
+    }
+  }
+]

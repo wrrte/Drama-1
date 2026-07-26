@@ -83,7 +83,7 @@ Models:
     Unimix_ratio: 0.01
     Weight_decay: 1.0e-4
     MacroLoss:
-      Enable: false
+      Enable: true
       AuxGamma: 0.985
       DistanceMetric: margin                 
       DBCAlpha: 0.3                       
@@ -119,11 +119,11 @@ Models:
       Probability: 0.2
       Target: critic
     AuxValueNet:
-      Enable: false
+      Enable: true
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
-      Enable: true
+      Enable: false
       UseAuxValueNet: false
       Scale: 10.0
       MaxWeight: 100.0

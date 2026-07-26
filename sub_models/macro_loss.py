@@ -73,6 +73,7 @@ class MacroLoss(nn.Module):
         self.max_relative_threshold_decay = float(cfg.get("MaxRelativeThresholdDecay", 0.999))
         # 훈련 재개 시에도 역대 최대치를 잊지 않도록 persistent=True로 등록합니다.
         self.register_buffer("running_max_trigger_metric", torch.tensor(1e-8, dtype=torch.float32), persistent=True)
+        self.register_buffer("running_max_metric", torch.tensor(1e-8, dtype=torch.float32), persistent=True)
         
         # [수정] Tensor-based Hash Table을 위한 전역 버퍼 할당
         self.buffer_max_length = buffer_max_length
@@ -182,11 +183,7 @@ class MacroLoss(nn.Module):
 
         return self.td_error_mean.to(torch.float32), self.td_error_var.to(torch.float32)
 
-    # [추가] EMA를 이용한 slow_aux_value_net 업데이트
-    @torch.no_grad()
-    def update_slow_target(self, decay=0.98):
-        for slow_param, param in zip(self.slow_aux_value_net.parameters(), self.aux_value_net.parameters()):
-            slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
+
 
     def _hash_keys(self, latent):
         if latent.numel() == 0:
@@ -197,7 +194,7 @@ class MacroLoss(nn.Module):
         keys = (bits.to(torch.int64) * bit_values).sum(dim=-1)
         return keys.detach()
 
-    def _update_memory(self, obs, reward, latent, reward_mean, reward_std, td_error=None, value=None, aux_value=None, indexes=None):
+    def _update_memory(self, obs, reward, latent, reward_mean, reward_std, td_error=None, value=None, aux_value=None, indexes=None, aux_mean=None, aux_std=None):
         if not self.enabled or indexes is None:
             return
         if obs.numel() == 0:
@@ -229,12 +226,12 @@ class MacroLoss(nn.Module):
                     
             elif self.trigger_type == "aux_value":
                 if aux_value is None:
-                    aux_value = self.aux_value_net(latent).squeeze(-1)
+                    raise ValueError("aux_value must be provided when trigger_type is 'aux_value'")
                 
                 aux_val_linear = symexp(aux_value.detach()).to(torch.float32)
                 # 글로벌 통계를 사용하여 마스크 생성
-                aux_mean = self.aux_value_mean.to(torch.float32)
-                aux_std = torch.sqrt(self.aux_value_var.to(torch.float32) + 1e-8)
+                if aux_mean is None or aux_std is None:
+                    raise ValueError("aux_mean and aux_std must be provided when trigger_type is 'aux_value'")
                 
                 store_mask = (torch.abs(aux_val_linear - aux_mean) >= self.sigma_threshold * aux_std) & align_mask
                 
@@ -244,7 +241,7 @@ class MacroLoss(nn.Module):
             # --- [추가된 부분] Value의 순간 변화량(차이)을 트리거로 사용하는 로직 ---
             elif self.trigger_type == "aux_value_diff":
                 if aux_value is None:
-                    aux_value = self.aux_value_net(latent).squeeze(-1)
+                    raise ValueError("aux_value must be provided when trigger_type is 'aux_value_diff'")
                     
                 # aux_value의 형태가 [B, L] 임을 활용하여 선형 스케일로 복원
                 aux_val_linear = symexp(aux_value.detach()).to(torch.float32)
@@ -254,7 +251,8 @@ class MacroLoss(nn.Module):
                 val_diff[..., 1:] = torch.abs(aux_val_linear[..., 1:] - aux_val_linear[..., :-1])
                 
                 # aux_value의 Welford 통계를 가져와서 마스크 생성
-                aux_std = torch.sqrt(self.aux_value_var.to(torch.float32) + 1e-8)
+                if aux_std is None:
+                    raise ValueError("aux_std must be provided when trigger_type is 'aux_value_diff'")
                 
                 # 변화량이 전체 가치의 표준편차 대비 비정상적으로 확 튈 때만 트리거
                 store_mask = (val_diff >= self.sigma_threshold * aux_std) & align_mask
@@ -277,7 +275,9 @@ class MacroLoss(nn.Module):
         if self.diff_type == "td_error":
             metric_to_store = td_error
         elif self.diff_type == "aux_value":
-            metric_to_store = aux_value if aux_value is not None else self.aux_value_net(latent).squeeze(-1)
+            if aux_value is None:
+                raise ValueError("aux_value must be provided when diff_type is 'aux_value'")
+            metric_to_store = aux_value
         elif self.diff_type == "value":
             metric_to_store = value if value is not None else torch.zeros_like(reward)
         else:
@@ -431,8 +431,8 @@ class MacroLoss(nn.Module):
                 "Current Bucket Distribution"
             ), global_step=global_step)
 
-    # --- [수정된 부분] global_step 인자 추가 ---
-    def forward(self, obs, latent, logits, reward, encode_fn, reward_mean, reward_std, td_error=None, value=None, aux_value=None, termination=None, indexes=None, replay_buffer=None, global_step=None, latent_full=None, aux_gamma=None, aux_lam=None):
+    # --- [수정된 부분] global_step, aux_mean, aux_std, aux_value_fn 인자 추가 ---
+    def forward(self, obs, latent, logits, reward, encode_fn, reward_mean, reward_std, td_error=None, value=None, aux_value=None, termination=None, indexes=None, replay_buffer=None, global_step=None, latent_full=None, aux_gamma=None, aux_lam=None, aux_mean=None, aux_std=None, aux_value_fn=None):
         self.debug_metrics = {'rebuild_triggered': 0.0}
         
         # --- [추가] 버킷 분포 로깅 지표 ---
@@ -468,8 +468,8 @@ class MacroLoss(nn.Module):
             raise ValueError("DiffType이 'value'일 경우 forward에 value를 반드시 전달해야 합니다.")
         if self.diff_type == "td_error" and td_error is None:
             raise ValueError("DiffType이 'td_error'일 경우 forward에 td_error를 반드시 전달해야 합니다.")
-        if self.diff_type == "aux_value" and value is None:
-            raise ValueError("DiffType이 'aux_value'일 경우 distillation 학습을 위해 forward에 value를 반드시 전달해야 합니다.")
+        # The check for diff_type == "aux_value" and value is None has been removed 
+        # since distillation is now handled externally if value is not provided.
             
         if reward.dim() == 3:
             reward = reward.squeeze(-1)
@@ -483,57 +483,14 @@ class MacroLoss(nn.Module):
             align_mask[..., 0] = False
             align_mask[..., -1] = False
 
-        latent_for_aux = latent_full.detach() if latent_full is not None else latent.detach()
-        aux_value_all = self.aux_value_net(latent_for_aux).squeeze(-1)
-        aux_val_linear_for_stats = symexp(aux_value_all.detach()).to(torch.float32)
-        
-        # Welford 통계 업데이트 (DynWeighting과 MacroLoss 트리거 모두에서 필요하므로 공통으로 1회만 수행)
-        # UseAuxValueNet이 False인 경우에는 compute_dynamics_weights에서 이미 업데이트했으므로 스킵 가능하지만,
-        # self.enabled가 True일 수 있으므로 여기서 업데이트 유지. (어차피 UseAuxValueNet이 False면서 enabled가 False면 위에서 early return 됨)
-        self._update_aux_welford(aux_val_linear_for_stats, align_mask)
-        
-        if value is not None:
-            # --- [수정] 대안 A+: 오프라인 보상 기반 TD(lambda) 타겟 계산 ---
-            # 1-step TD 대신 lambda_return을 사용하여 Sparse Reward를 빠르게 뒤로 전파시킵니다.
-            with torch.no_grad():
-                gamma = 0.999 if aux_gamma is None else aux_gamma
-                lam = 0.98 if aux_lam is None else aux_lam
-                
-                # EMA 타겟 네트워크(slow_aux_value_net)의 출력을 사용하여 Bootstrap (값 붕괴 방지)
-                slow_aux_value_all = self.slow_aux_value_net(latent_for_aux).squeeze(-1)
-                aux_val_linear = symexp(slow_aux_value_all.detach())
-                
-                if termination is None:
-                    # termination이 주어지지 않은 경우 모두 끝나지 않은 것으로 간주
-                    inv_termination = torch.ones_like(reward)
-                else:
-                    if termination.dim() == 3:
-                        termination = termination.squeeze(-1)
-                    inv_termination = (termination * -1) + 1
-                    
-                batch_size, batch_length = reward.shape[:2]
-                gamma_return = torch.zeros((batch_size, batch_length + 1), dtype=reward.dtype, device=reward.device)
-                
-                # 마지막 스텝의 bootstrap은 현재 모델의 aux_value 사용
-                gamma_return[:, -1] = aux_val_linear[:, -1]
-                
-                for t in reversed(range(batch_length)):
-                    # Lambda Return 계산
-                    # 경계 조건 처리: 마지막 스텝(t == batch_length - 1)은 다음 상태가 없으므로 현재 상태 가치를 임시로 사용
-                    next_val = aux_val_linear[:, t+1] if t + 1 < batch_length else aux_val_linear[:, t]
-                    
-                    gamma_return[:, t] = \
-                        reward[:, t] + \
-                        gamma * inv_termination[:, t] * (1 - lam) * next_val + \
-                        gamma * inv_termination[:, t] * lam * gamma_return[:, t+1]
-                            
-                target_v_linear_full = gamma_return[:, :-1]
-                
-            sym_target_value = symlog(target_v_linear_full)
-            distill_loss = F.mse_loss(aux_value_all[align_mask], sym_target_value[align_mask])
-            # --------------------------------------------------------
+        # AuxValueNet evaluation and Welford updates are now handled in WorldModel.
+        # We just use the provided aux_value directly.
+        if aux_value is not None:
+            aux_value_all = aux_value.squeeze(-1)
         else:
-            distill_loss = latent.new_tensor(0.0)
+            aux_value_all = None
+            
+        distill_loss = latent.new_tensor(0.0)
 
         # MacroLoss가 비활성화되어 있다면, 대비 학습(Contrastive) 등 나머지 로직은 스킵
         if not self.enabled:
@@ -573,9 +530,9 @@ class MacroLoss(nn.Module):
                     self.running_max_trigger_metric.copy_(torch.max(self.running_max_trigger_metric * self.max_relative_threshold_decay, current_max_aux))
 
             # 글로벌 Welford 통계 가져오기 (공통 영역에서 이미 업데이트됨)
-            aux_mean = self.aux_value_mean.to(torch.float32)
-            aux_var = self.aux_value_var.to(torch.float32)
-            aux_std = torch.sqrt(aux_var + 1e-8)
+            if aux_mean is None or aux_std is None:
+                raise ValueError("aux_mean and aux_std must be provided when trigger_type is 'aux_value'")
+            
             trigger_mask_sigma = (torch.abs(aux_val_linear - aux_mean) >= self.sigma_threshold * aux_std) & align_mask
             self.debug_metrics['sigma_trigger_count'] = trigger_mask_sigma.sum().item()
             trigger_mask = trigger_mask_sigma
@@ -609,9 +566,11 @@ class MacroLoss(nn.Module):
                     self.debug_metrics['val_diff_batch_var'] = valid_diff.var(unbiased=False).item() if valid_diff.numel() > 1 else 0.0
 
             # 글로벌 Welford 통계 (aux_value 기준)
-            aux_std = torch.sqrt(self.aux_value_var.to(torch.float32) + 1e-8)
-            self.debug_metrics['aux_value_global_mean'] = self.aux_value_mean.item()
-            self.debug_metrics['aux_value_global_var'] = self.aux_value_var.item()
+            if aux_mean is None or aux_std is None:
+                raise ValueError("aux_mean and aux_std must be provided when trigger_type is 'aux_value_diff'")
+            
+            self.debug_metrics['aux_value_global_mean'] = aux_mean.item()
+            self.debug_metrics['aux_value_global_var'] = (aux_std ** 2).item()
             
             trigger_mask_sigma = (val_diff >= self.sigma_threshold * aux_std) & align_mask
             self.debug_metrics['sigma_trigger_count'] = trigger_mask_sigma.sum().item()
@@ -919,12 +878,16 @@ class MacroLoss(nn.Module):
         curr_metric = torch.stack(curr_metric_list, dim=0)
 
         if self.diff_type == "aux_value":
-            past_aux_pred = self.aux_value_net(past_latent_full).squeeze(-1)
+            if aux_value_fn is None:
+                raise ValueError("aux_value_fn must be provided when diff_type is 'aux_value'")
+            past_aux_pred = aux_value_fn(past_latent_full).squeeze(-1)
             # [수정] SymLog → Linear 변환 후 차이 계산 (SymLog 압축으로 인한 후반부 가중치 소실 방지)
             curr_linear = symexp(curr_metric.detach())
             past_linear = symexp(past_aux_pred.detach())
             metric_diff = torch.abs(curr_linear - past_linear)
-            sigma = torch.sqrt(self.aux_value_var + 1e-8)
+            if aux_std is None:
+                raise ValueError("aux_std must be provided when diff_type is 'aux_value'")
+            sigma = aux_std
         elif self.diff_type == "td_error":
             past_metric = torch.tensor(past_metric_list, device=latent.device, dtype=curr_metric.dtype)
             metric_diff = torch.abs(curr_metric.detach() - past_metric)
@@ -983,5 +946,5 @@ class MacroLoss(nn.Module):
             
         loss = contrastive_loss + distill_loss
 
-        self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes)
+        self._update_memory(obs, reward, latent, reward_mean, reward_std, td_error, value, aux_value_all, indexes, aux_mean, aux_std)
         return loss, distill_loss, contrastive_loss, trigger_obs, trigger_mask, trigger_mask_original
