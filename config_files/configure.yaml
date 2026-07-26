@@ -83,7 +83,7 @@ Models:
     Unimix_ratio: 0.01
     Weight_decay: 1.0e-4
     MacroLoss:
-      Enable: true
+      Enable: false
       AuxGamma: 0.985
       DistanceMetric: margin                 
       DBCAlpha: 0.3                       
@@ -101,7 +101,7 @@ Models:
       HashBits: 10
       MaxQueuePerKey: 100000
       MaxPastSamples: 16
-      LossScale: 0
+      LossScale: 10
       LazyRebuild:
         Enable: true
         SampleMultiplier: 8
@@ -119,7 +119,7 @@ Models:
       Probability: 0.2
       Target: critic
     AuxValueNet:
-      Enable: true
+      Enable: false
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
@@ -170,7 +170,7 @@ Models:
   Agent:
     dtype: float32
     Policy: AC # AC or PPO
-    Unimix_ratio: 0
+    Unimix_ratio: 0.01
     AC:
       EnableCriticProbe: true
       NumLayers: 3    

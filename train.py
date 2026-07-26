@@ -420,12 +420,18 @@ def joint_train_world_model_agent(config, logdir,
                         # Continuous: shape is (L, A) -> reshape to (1, L, A)
                         model_context_action = rearrange(torch.Tensor(model_context_action).to(world_model.device), "L A -> 1 L A")
                     
+                    # 현재 프레임(current_ob)의 실제 이미지 기반 인코딩 (Posterior 역할)
+                    current_obs_tensor = rearrange(torch.Tensor(current_ob).to(world_model.device), "H W C -> 1 1 C H W") / 255
+                    current_latent = world_model.encode_obs(current_obs_tensor)
+
                     if world_model.model == 'Transformer':
-                        prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
+                        _, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
                     elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
-                        prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
+                        _, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
+
+                    # Prior가 아닌 현재 프레임의 관측 결과(current_latent)를 바탕으로 행동 결정
                     action = agent.sample_as_env_action(
-                        torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
+                        torch.cat([current_latent, last_dist_feat], dim=-1),
                         greedy=False
                     )[0]
 

@@ -11,3 +11,8 @@ probing critic net 추가하기. 이를 통해 hidden state 없이도 probing이
 
 
 에피소드 길이가 길수록 demodecay를 크게 하여 감소율을 줄이는 기법도 추가해야함.
+
+
+
+current_latent(Posterior)를 인코딩하여 Actor의 입력으로 사용하도록 코드를 수정한 것이 데모 데이터를 잘 따라하는 원인?
+drama는 prior를 그대로 사용했는데, 이런 기존의 방식이 틀렸다는 것을 증명할 수 있을지도?

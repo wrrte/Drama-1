@@ -75,16 +75,18 @@ def eval_episodes(config,
                     context_latent = world_model.encode_obs(torch.cat(list(context_obs), dim=1).to(world_model.device))
                     model_context_action = np.stack(list(context_action), axis=1)
                     model_context_action = torch.Tensor(model_context_action).to(world_model.device)
-                    # current_obs_tensor = rearrange(torch.Tensor(current_obs).to(world_model.device), "B H W C -> B 1 C H W")/255
+                    # 현재 프레임(current_obs)의 실제 이미지 기반 인코딩 (Posterior 역할)
+                    current_obs_tensor = rearrange(torch.Tensor(current_obs).to(world_model.device), "B H W C -> B 1 C H W")/255
+                    current_latent = world_model.encode_obs(current_obs_tensor)
+
                     if world_model.model == 'Transformer':
-                        prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
-                        # prior_flattened_sample, last_dist_feat = world_model.calc_last_post_feat(context_latent, model_context_action, current_obs_tensor)
+                        _, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
                     elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
-                        # prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent[:,-1:], model_context_action[:,-1:], inference_params)
-                        prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
-                        # prior_flattened_sample, last_dist_feat = world_model.calc_last_post_feat(context_latent, model_context_action, current_obs_tensor)
+                        _, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
+
+                    # Prior가 아닌 현재 프레임의 관측 결과(current_latent)를 바탕으로 행동 결정
                     action = agent.sample_as_env_action(
-                        torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
+                        torch.cat([current_latent, last_dist_feat], dim=-1),
                         greedy=True
                     )
 
