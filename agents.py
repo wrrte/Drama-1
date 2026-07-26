@@ -118,8 +118,7 @@ class ActorCriticAgent(nn.Module):
         act = getattr(nn, conf.Models.Agent.AC.Act)
 
         # Parse LatentDropout config
-        macro_cfg = conf.Models.WorldModel.get("MacroLoss", {})
-        dropout_cfg = macro_cfg.get("LatentDropout", {})
+        dropout_cfg = conf.Models.WorldModel.get("LatentDropout", {})
         use_dropout = bool(dropout_cfg.get("Enable", False))
         dropout_p = float(dropout_cfg.get("Probability", 0.2))
         dropout_target = str(dropout_cfg.get("Target", "aux_value_net")).lower()
@@ -391,8 +390,7 @@ class PPOAgent(nn.Module):
         act = getattr(nn, conf.Models.Agent.PPO.Act)
 
         # Parse LatentDropout config
-        macro_cfg = conf.Models.WorldModel.get("MacroLoss", {})
-        dropout_cfg = macro_cfg.get("LatentDropout", {})
+        dropout_cfg = conf.Models.WorldModel.get("LatentDropout", {})
         use_dropout = bool(dropout_cfg.get("Enable", False))
         dropout_p = float(dropout_cfg.get("Probability", 0.2))
         dropout_target = str(dropout_cfg.get("Target", "aux_value_net")).lower()

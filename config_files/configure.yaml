@@ -114,10 +114,10 @@ Models:
       StoreOnlyTriggered: false 
       Cutout:
         Enable: false
-      LatentDropout:
-        Enable: true
-        Probability: 0.2
-        Target: critic
+    LatentDropout:
+      Enable: true
+      Probability: 0.2
+      Target: critic
     AuxValueNet:
       Enable: false
       AuxGamma: 0.985
