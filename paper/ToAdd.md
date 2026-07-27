@@ -17,3 +17,7 @@ probing critic net 추가하기. 이를 통해 hidden state 없이도 probing이
 current_latent(Posterior)를 인코딩하여 Actor의 입력으로 사용하도록 코드를 수정한 것이 데모 데이터를 잘 따라하는 원인?
 drama는 prior를 그대로 사용했는데, 이런 기존의 방식이 틀렸다는 것을 증명할 수 있을지도?
 - 아님. 성능은 전혀 안 변하거든. 다른 원인은 있지만, 혹시 모르니 기록해두자.
+
+
+
+pooling이랑 resize 기법의 중요성? 언급
