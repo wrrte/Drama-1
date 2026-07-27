@@ -17,7 +17,7 @@ class MaxLast2FrameSkipWrapper(gymnasium.Wrapper):
 
     def step(self, action):
         total_reward = 0
-        self.obs_buffer = deque(maxlen=2)
+        self.obs_buffer = deque(maxlen=self.skip)
         for _ in range(self.skip):
             obs, reward, done, truncated, info = self.env.step(action)
             self.obs_buffer.append(obs)
@@ -29,6 +29,26 @@ class MaxLast2FrameSkipWrapper(gymnasium.Wrapper):
         else:
             obs = np.max(np.stack(self.obs_buffer), axis=0)
         return obs, total_reward, done, truncated, info
+
+class AreaResizeObservation(gymnasium.ObservationWrapper):
+    def __init__(self, env, shape):
+        super().__init__(env)
+        if isinstance(shape, int):
+            shape = (shape, shape)
+        self.shape = tuple(shape)
+        
+        obs_shape = self.shape + self.observation_space.shape[2:]
+        self.observation_space = gymnasium.spaces.Box(
+            low=0, high=255, shape=obs_shape, dtype=np.uint8
+        )
+
+    def observation(self, observation):
+        obs = cv2.resize(
+            observation, self.shape[::-1], interpolation=cv2.INTER_AREA
+        )
+        if len(obs.shape) == 2 and len(self.observation_space.shape) == 3:
+            obs = np.expand_dims(obs, axis=-1)
+        return obs
 
 def build_single_env(env_name, image_size):
     env = gymnasium.make(env_name, full_action_space=True, frameskip=1)

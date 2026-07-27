@@ -1,6 +1,4 @@
 import gymnasium as gym
-import ale_py
-gym.register_envs(ale_py)
 import numpy as np
 
 
@@ -63,7 +61,7 @@ class Atari(gym.Env):
         self._seed = seed
         self._is_init = True
         shape = self._env.observation_space.shape
-        self._buffer = [np.zeros(shape, np.uint8) for _ in range(2)]
+        self._buffer = [np.zeros(shape, np.uint8) for _ in range(self._repeat)]
         self._ale = self._env.unwrapped.ale
         self._last_lives = None
         self._done = True
@@ -100,19 +98,19 @@ class Atari(gym.Env):
             _, reward, terminated, truncated, info = self._env.step(action)
             self._step += 1
             total += reward
-            if repeat == self._repeat - 2:
-                self._screen(self._buffer[1])
+            self._screen(self._buffer[repeat])
             if terminated or truncated:
+                for r in range(repeat + 1, self._repeat):
+                    self._buffer[r][:] = self._buffer[repeat][:]
                 break
             if self._lives != "unused":
                 current = self._ale.lives()
                 if current < self._last_lives:
                     dead = True
                     self._last_lives = current
+                    for r in range(repeat + 1, self._repeat):
+                        self._buffer[r][:] = self._buffer[repeat][:]
                     break
-        if not self._repeat:
-            self._buffer[1][:] = self._buffer[0][:]
-        self._screen(self._buffer[0])
         my_truncated = self._length and self._step >= self._length
         self._done = terminated or my_truncated or truncated
         return self._obs(
@@ -135,7 +133,8 @@ class Atari(gym.Env):
                     self._env.reset()
         self._last_lives = self._ale.lives()
         self._screen(self._buffer[0])
-        self._buffer[1].fill(0)
+        for r in range(1, self._repeat):
+            self._buffer[r].fill(0)
 
         self._done = False
         self._step = 0
@@ -143,8 +142,7 @@ class Atari(gym.Env):
         return obs, info
 
     def _obs(self, reward, info, is_first=False, is_last=False, is_terminal=False):
-        np.maximum(self._buffer[0], self._buffer[1], out=self._buffer[0]) # https://danieltakeshi.github.io/2016/11/25/frame-skipping-and-preprocessing-for-deep-q-networks-on-atari-2600-games/
-        image = self._buffer[0]
+        image = np.max(np.stack(self._buffer), axis=0)
         if image.shape[:2] != self._size:
             if self._resize == "opencv":
                 image = self._cv2.resize(
@@ -152,7 +150,7 @@ class Atari(gym.Env):
                 )
             if self._resize == "pillow":
                 image = self._image.fromarray(image)
-                image = image.resize(self._size, self._image.NEAREST)
+                image = image.resize(self._size, self._image.BOX)
                 image = np.array(image)
         if self._gray:
             weights = [0.299, 0.587, 1 - (0.299 + 0.587)]

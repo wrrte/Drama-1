@@ -28,10 +28,7 @@ def process_visualize(img):
 def build_single_env(env_name, image_size):
     env = gymnasium.make(env_name, full_action_space=False, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
     env = env_wrapper.MaxLast2FrameSkipWrapper(env, skip=4)
-    # Convert to tuple if it's a list (from YAML)
-    if isinstance(image_size, list):
-        image_size = tuple(image_size)
-    env = gymnasium.wrappers.ResizeObservation(env, shape=image_size)
+    env = env_wrapper.AreaResizeObservation(env, shape=image_size)
     return env
 
 
