@@ -500,6 +500,8 @@ class WorldModel(nn.Module):
         dyn_use_aux_value_net = bool(self.dyn_cfg.get("UseAuxValueNet", True))
         dyn_weighting_scale = float(self.dyn_cfg.get("Scale", 25.0))
         dyn_weighting_max = float(self.dyn_cfg.get("MaxWeight", 100.0))
+        dyn_z_threshold = float(self.dyn_cfg.get("ZScoreThreshold", 0.0))
+        dyn_trigger_mode = str(self.dyn_cfg.get("TriggerMode", "both")).lower()
         
         from sub_models.functions_losses import symexp
         with torch.no_grad():
@@ -518,7 +520,8 @@ class WorldModel(nn.Module):
                     self.aux_value_module.update_welford(aux_val_linear, align_mask)
             
             val_diff = torch.zeros_like(aux_val_linear)
-            val_diff[:, 1:] = torch.abs(aux_val_linear[:, 1:] - aux_val_linear[:, :-1])
+            val_diff_raw = aux_val_linear[:, 1:] - aux_val_linear[:, :-1]
+            val_diff[:, 1:] = torch.abs(val_diff_raw)
             
             if self.aux_value_module is not None:
                 aux_std = torch.sqrt(self.aux_value_module.aux_value_var.to(torch.float32) + 1e-8)
@@ -527,9 +530,18 @@ class WorldModel(nn.Module):
                 aux_std = torch.std(val_diff) + 1e-8
                 
             z_score = val_diff / aux_std
+            
+            if dyn_trigger_mode == "increase":
+                z_score[:, 1:][val_diff_raw <= 0] = 0.0
+            elif dyn_trigger_mode == "decrease":
+                z_score[:, 1:][val_diff_raw >= 0] = 0.0
+                
             z_clamped = z_score.clamp(min=0.0)
             weights = 1.0 + dyn_weighting_scale * z_clamped
             weights = weights.clamp(max=dyn_weighting_max)
+            
+            # Apply threshold: if z_score is below threshold, weight is 1.0
+            weights[z_score < dyn_z_threshold] = 1.0
         
         return weights
 
