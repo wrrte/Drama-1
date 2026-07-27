@@ -126,9 +126,13 @@ Models:
       Enable: true
       UseAuxValueNet: false
       Scale: 0.5
-      MaxWeight: 2.5
       ZScoreThreshold: 2.0
-      TriggerMode: "increase" # both, increase, decrease
+      TriggerMode: "increase" # both; increase; decrease
+
+      ClipMode: "fixed" # fixed; percentile
+      MaxWeight: 2.5
+      ClipPercentile: 99.0
+
       ApplyToRecon: true
       ApplyToReward: false
     Adam:

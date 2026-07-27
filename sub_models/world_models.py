@@ -495,11 +495,13 @@ class WorldModel(nn.Module):
         """Value-diff의 z-score에 비례하는 dynamics loss 가중치를 계산합니다."""
         dyn_weighting_enable = bool(self.dyn_cfg.get("Enable", False))
         if not dyn_weighting_enable:
-            return None
+            return None, {}
             
         dyn_use_aux_value_net = bool(self.dyn_cfg.get("UseAuxValueNet", True))
         dyn_weighting_scale = float(self.dyn_cfg.get("Scale", 25.0))
+        dyn_clip_mode = str(self.dyn_cfg.get("ClipMode", "fixed")).lower()
         dyn_weighting_max = float(self.dyn_cfg.get("MaxWeight", 100.0))
+        dyn_clip_percentile = float(self.dyn_cfg.get("ClipPercentile", 99.0))
         dyn_z_threshold = float(self.dyn_cfg.get("ZScoreThreshold", 0.0))
         dyn_trigger_mode = str(self.dyn_cfg.get("TriggerMode", "both")).lower()
         
@@ -538,12 +540,27 @@ class WorldModel(nn.Module):
                 
             z_clamped = z_score.clamp(min=0.0)
             weights = 1.0 + dyn_weighting_scale * z_clamped
-            weights = weights.clamp(max=dyn_weighting_max)
+            
+            if dyn_clip_mode == "percentile":
+                clip_value = torch.quantile(weights.float(), dyn_clip_percentile / 100.0).item()
+            else:
+                clip_value = dyn_weighting_max
+                
+            weights = weights.clamp(max=clip_value)
             
             # Apply threshold: if z_score is below threshold, weight is 1.0
             weights[z_score < dyn_z_threshold] = 1.0
+            
+            metrics = {
+                "val_diff_mean": val_diff[:, 1:].mean().item(),
+                "val_diff_std": val_diff[:, 1:].std().item() if val_diff[:, 1:].numel() > 1 else 0.0,
+                "weight_95_percentile": torch.quantile(weights.float(), 0.95).item(),
+                "weight_99_percentile": torch.quantile(weights.float(), 0.99).item(),
+                "weight_clip_ratio": (weights >= clip_value).float().mean().item(),
+                "weight_clip_value": clip_value
+            }
         
-        return weights
+        return weights, metrics
 
     def encode_for_macro(self, obs):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -851,7 +868,7 @@ class WorldModel(nn.Module):
                         values_sq = torch.zeros_like(reward_sq)
                         values_sq[:, 1:] = aligned_values.squeeze(-1) if aligned_values.dim() == 3 else aligned_values
 
-            dyn_weights = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq)
+            dyn_weights, dyn_metrics = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq)
             
             # AuxValueNet Distillation (if enabled)
             m_distill_loss = torch.tensor(0.0, device=obs.device)
@@ -964,7 +981,10 @@ class WorldModel(nn.Module):
             if dyn_weights is not None and logger is not None:
                 logger.log("DynWeighting/mean_weight", dyn_weights.mean().item(), global_step=global_step)
                 logger.log("DynWeighting/max_weight", dyn_weights.max().item(), global_step=global_step)
-                logger.log("DynWeighting/boosted_frame_ratio", (dyn_weights > 1.5).float().mean().item(), global_step=global_step)
+                logger.log("DynWeighting/boosted_frame_ratio", (dyn_weights > 1.0).float().mean().item(), global_step=global_step)
+                if 'dyn_metrics' in locals() and dyn_metrics:
+                    for k, v in dyn_metrics.items():
+                        logger.log(f"DynWeighting/{k}", v, global_step=global_step)
 
         # gradient descent
         self.scaler.scale(total_loss).backward()
