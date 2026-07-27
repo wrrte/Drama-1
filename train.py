@@ -87,7 +87,9 @@ def _load_npz_demo(demo_path):
             termination = data['done'].copy()
         else:
             raise ValueError(f"{demo_path} must include either 'termination' or 'done'.")
-    return obs, action, reward, termination
+        
+        ram = data['ram'].copy() if 'ram' in data.files else None
+    return obs, action, reward, termination, ram
 
 def _validate_demo_actions(action_array, env, strict_action_check=True):
     if action_array.size == 0:
@@ -148,12 +150,14 @@ def preload_play_demonstrations(config, replay_buffer: ReplayBuffer, env):
     used_action_ids = set()
     demo_scores = []
 
+    probe_idx = getattr(config.BasicSettings, 'ProbeRamIndex', None)
+
     for demo_path in demo_files:
         if len(replay_buffer) >= replay_buffer.max_length:
             print('Replay buffer is full while loading demonstrations. Stopping preload early.')
             break
 
-        obs, action, reward, termination = _load_npz_demo(demo_path)
+        obs, action, reward, termination, ram = _load_npz_demo(demo_path)
 
         if obs.ndim != 4 or tuple(obs.shape[1:]) != expected_obs_shape:
             print(f'Warning: {demo_path} observation shape mismatch. Expected (T, {expected_obs_shape[0]}, {expected_obs_shape[1]}, {expected_obs_shape[2]}), got {obs.shape}. Skipping this file.')
@@ -183,7 +187,10 @@ def preload_play_demonstrations(config, replay_buffer: ReplayBuffer, env):
             print(f'Truncating {demo_path} from {len(obs)} to {steps_to_insert} steps due to replay buffer capacity.')
 
         for i in range(steps_to_insert):
-            replay_buffer.append(obs[i], float(action[i]), float(reward[i]), float(termination[i]))
+            target_metric = 0.0
+            if ram is not None and probe_idx is not None:
+                target_metric = float(ram[i][probe_idx])
+            replay_buffer.append(obs[i], float(action[i]), float(reward[i]), float(termination[i]), target_metric)
 
         total_steps += steps_to_insert
         print(colorama.Fore.GREEN + f"Loaded demo file: {os.path.basename(demo_path)}" + colorama.Style.RESET_ALL)
@@ -222,7 +229,7 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
     epoch_macro_contrastive_loss_list = []
     
     for e in range(epoch):
-        obs, action, reward, termination, indexes = replay_buffer.sample(batch_size, batch_length, imagine=False)
+        obs, action, reward, termination, target_metrics, indexes = replay_buffer.sample(batch_size, batch_length, imagine=False)
         (
             reconstruction_loss, reward_loss, termination_loss,
             dynamics_loss, dynamics_real_kl_div, representation_loss,
@@ -231,7 +238,7 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
         ) = world_model.update(
             obs, action, reward, termination, 
             global_step=global_step, epoch_step=e, logger=logger,
-            indexes=indexes, replay_buffer=replay_buffer, agent=agent
+            indexes=indexes, replay_buffer=replay_buffer, agent=agent, target_metrics=target_metrics
         )
 
         epoch_reconstruction_loss_list.append(reconstruction_loss)
@@ -274,7 +281,7 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
     '''
     world_model.eval()
     agent.eval()
-    sample_obs, sample_action, sample_reward, sample_termination, indexes = replay_buffer.sample(
+    sample_obs, sample_action, sample_reward, sample_termination, _, indexes = replay_buffer.sample(
         imagine_batch_size, imagine_context_length + imagine_batch_length, imagine=True)
         
     # 데모 데이터 여부를 나타내는 마스크 생성
@@ -442,7 +449,11 @@ def joint_train_world_model_agent(config, logdir,
 
         env_start_time = time.time()
         ob, reward, is_last, info = env.step(action)
-        replay_buffer.append(current_ob, action, reward, info['is_terminal'])
+        target_metric = 0.0
+        probe_idx = getattr(config.BasicSettings, 'ProbeRamIndex', None)
+        if 'ram' in info and info['ram'] is not None and probe_idx is not None:
+            target_metric = float(info['ram'][probe_idx])
+        replay_buffer.append(current_ob, action, reward, info['is_terminal'], target_metric)
 
         sum_reward += reward
         current_ob = ob

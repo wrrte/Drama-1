@@ -159,6 +159,11 @@ class Atari(gym.Env):
         info['is_first'] = is_first
         info['is_terminal'] = is_terminal
         info['episode_frame_number'] //= self._repeat
+        
+        try:
+            info['ram'] = self._env.unwrapped.ale.getRAM().copy()
+        except AttributeError:
+            info['ram'] = None
         return (
             # {"image": image, "is_terminal": is_terminal, "is_first": is_first},
             image,

@@ -829,7 +829,7 @@ class WorldModel(nn.Module):
 
 
     @profile
-    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None, indexes=None, replay_buffer=None, agent=None):
+    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None, indexes=None, replay_buffer=None, agent=None, target_metrics=None):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -985,6 +985,24 @@ class WorldModel(nn.Module):
                 if 'dyn_metrics' in locals() and dyn_metrics:
                     for k, v in dyn_metrics.items():
                         logger.log(f"DynWeighting/{k}", v, global_step=global_step)
+
+            if target_metrics is not None and logger is not None and target_metrics.numel() > 0:
+                b, t = target_metrics.shape[:2]
+                target_diff = target_metrics[:, 1:] - target_metrics[:, :-1]
+                
+                total_frames = b * (t - 1)
+                
+                diver_changed = (target_diff > 0).float()
+                total_changed = diver_changed.sum().item()
+                
+                logger.log("Probing/DiverChanged_TotalFrames", total_frames, global_step=global_step)
+                logger.log("Probing/DiverChanged_AnyFrames", total_changed, global_step=global_step)
+                
+                if dyn_weights is not None:
+                    trigger_mask = (dyn_weights[:, 1:] > 1.0).float()
+                    # How many frames where diver count changed ALSO got boosted by dyn_weights?
+                    diver_changed_and_triggered = (diver_changed * trigger_mask).sum().item()
+                    logger.log("Probing/DiverChanged_TriggeredFrames", diver_changed_and_triggered, global_step=global_step)
 
         # gradient descent
         self.scaler.scale(total_loss).backward()
