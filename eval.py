@@ -129,6 +129,75 @@ def eval_episodes(config,
                             return score_table
 
 
+def eval_representation(world_model, npz_path, logger, global_step):
+    import numpy as np
+    import torch
+    from einops import rearrange
+    import os
+    
+    if not os.path.exists(npz_path):
+        return
+
+    data = np.load(npz_path)
+    obs = data['obs']
+    ram = data['ram']
+    
+    T = obs.shape[0]
+    visual_diver = ram[:, 62].copy()
+    
+    if "Seaquest_20260728_193756.npz" in npz_path:
+        if T > 368:
+            visual_diver[368] = 4
+
+    world_model.eval()
+    Z_list = []
+    batch_size = 64
+    with torch.no_grad():
+        for i in range(0, T, batch_size):
+            obs_batch = obs[i:i+batch_size]
+            obs_tensor = torch.Tensor(obs_batch).to(world_model.device)
+            # Rearrange to [B, 1, C, H, W]
+            obs_tensor = rearrange(obs_tensor, "b h w c -> b 1 c h w") / 255.0
+            latent = world_model.encode_obs(obs_tensor)
+            # Flatten to [B, D]
+            Z_list.append(latent.squeeze(1).cpu().numpy())
+            
+    Z = np.concatenate(Z_list, axis=0) # [T, D]
+    
+    m_k = {}
+    for k in range(7):
+        mask = (visual_diver == k)
+        if np.any(mask):
+            m_k[k] = np.mean(Z[mask], axis=0)
+        else:
+            m_k[k] = np.zeros(Z.shape[1])
+            
+    distances = []
+    for k in range(6):
+        if k in m_k and (k+1) in m_k:
+            distances.append(np.linalg.norm(m_k[k+1] - m_k[k]))
+    d_between = np.mean(distances) if distances else 0.0
+    
+    d_within_list = []
+    for t in range(T):
+        k = visual_diver[t]
+        d_within_list.append(np.linalg.norm(Z[t] - m_k[k]))
+    d_within = np.mean(d_within_list)
+    
+    S = d_within / d_between if d_between > 0 else 0.0
+    
+    log_dict = {
+        "evaluate_rep/d_between": d_between,
+        "evaluate_rep/d_within": d_within,
+        "evaluate_rep/S": S
+    }
+    for k in range(7):
+        log_dict[f"evaluate_rep/m_{k}_norm"] = np.linalg.norm(m_k[k])
+        if k < 6:
+            log_dict[f"evaluate_rep/dist_m{k}_m{k+1}"] = np.linalg.norm(m_k[k+1] - m_k[k])
+            
+    for key, value in log_dict.items():
+        logger.log(key, float(value), global_step=global_step)
 
 
 if __name__ == "__main__":

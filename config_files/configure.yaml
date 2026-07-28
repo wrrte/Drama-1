@@ -32,12 +32,12 @@ Demonstration:
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
 
-  DemoRatioDecayScoreMultiplier: 0.5
-  BaseEpisodeLength: 800
-  DemoRatioDecayRate: 0.9
+  DemoRatioDecayScoreMultiplier: 1.0
+  BaseEpisodeLength: 600
+  DemoRatioDecayRate: 0.85
   DemoRatioDecayThreshold: 0.05
 
-  BCWeight: 13.0
+  BCWeight: 10.0
   BCWeightDecayRate: 0.65
   BCWeightDecayThreshold: 0.1
 
