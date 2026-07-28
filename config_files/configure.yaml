@@ -27,8 +27,8 @@ Demonstration:
   WorldModelDemoRatio: 0.1
 
   AgentDemoRatio: 0.0
-  AgentDemoRatioStartStep: 4000
-  AgentDemoRatioPeakStep: 5000
+  AgentDemoRatioStartStep: 5000
+  AgentDemoRatioPeakStep: 6000
   AgentDemoRatioPeak: 0.1
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
@@ -125,7 +125,7 @@ Models:
       AuxLam: 0.95
     DynWeighting:
       Enable: true
-      StartStep: 7000
+      StartStep: 12000
       UseAuxValueNet: false
       Scale: 0.5
       ZScoreThreshold: 2.0
