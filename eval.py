@@ -24,11 +24,25 @@ def process_visualize(img):
     img = cv2.resize(img, (640, 640))
     return img
 
+class RAMWrapper(gymnasium.Wrapper):
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        if hasattr(self.unwrapped, 'ale'):
+            info['ram'] = self.unwrapped.ale.getRAM().copy()
+        return obs, reward, terminated, truncated, info
+        
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        if hasattr(self.unwrapped, 'ale'):
+            info['ram'] = self.unwrapped.ale.getRAM().copy()
+        return obs, info
+
 
 def build_single_env(env_name, image_size):
     env = gymnasium.make(env_name, full_action_space=False, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
     env = env_wrapper.MaxLast2FrameSkipWrapper(env, skip=4)
     env = env_wrapper.AreaResizeObservation(env, shape=image_size)
+    env = RAMWrapper(env)
     return env
 
 
@@ -40,6 +54,21 @@ def build_vec_env(env_name, image_size, num_envs):
     env_fns = [lambda_generator(env_name, image_size) for i in range(num_envs)]
     vec_env = gymnasium.vector.AsyncVectorEnv(env_fns=env_fns)
     return vec_env
+
+def _get_ram_62(ram_obj, i):
+    if isinstance(ram_obj, (list, tuple)):
+        return ram_obj[i][62]
+    elif hasattr(ram_obj, 'ndim'):
+        if ram_obj.ndim == 2:
+            return ram_obj[i, 62]
+        elif ram_obj.ndim == 1:
+            first_elem = ram_obj[0]
+            if isinstance(first_elem, (list, tuple, np.ndarray)):
+                return ram_obj[i][62]
+            else:
+                return ram_obj[62]
+    return ram_obj[i][62]
+
 
 
 def eval_episodes(config,
@@ -71,7 +100,7 @@ def eval_episodes(config,
     initial_info = _ if isinstance(_, dict) else {}
     if 'ram' in initial_info:
         for i in range(config.Evaluate.NumEnvs):
-            episode_rams[i].append(initial_info['ram'][i, 62])
+            episode_rams[i].append(_get_ram_62(initial_info['ram'], i))
             episode_obs[i].append(current_obs[i].copy())
             
     collected_instances = []
@@ -126,7 +155,7 @@ def eval_episodes(config,
                     # In VectorEnv, if done, info['ram'] might be the new episode's ram.
                     # terminal ram might be in info['final_info'][i]['ram'].
                     # But for simplicity, we just append info['ram']
-                    episode_rams[i].append(info['ram'][i, 62])
+                    episode_rams[i].append(_get_ram_62(info['ram'], i))
                     episode_obs[i].append(current_obs[i].copy())
 
             done_flag = np.logical_or(done, truncated)
@@ -187,7 +216,7 @@ def eval_episodes(config,
                                 score_table['evaluate/mean_weight'].append(np.mean(dyn_weights))
                                 
                         episode_values[i] = []
-                        episode_rams[i] = [info['ram'][i, 62]] if 'ram' in info else []
+                        episode_rams[i] = [_get_ram_62(info['ram'], i)] if 'ram' in info else []
                         episode_obs[i] = [current_obs[i].copy()]
                         
                         sum_reward[i] = 0
