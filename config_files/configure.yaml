@@ -26,8 +26,8 @@ Demonstration:
   WorldModelDemoRatio: 0.1
 
   AgentDemoRatio: 0.0
-  AgentDemoRatioStartStep: 3000
-  AgentDemoRatioPeakStep: 4000
+  AgentDemoRatioStartStep: 5000
+  AgentDemoRatioPeakStep: 6000
   AgentDemoRatioPeak: 0.1
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
@@ -37,7 +37,7 @@ Demonstration:
   DemoRatioDecayRate: 0.9
   DemoRatioDecayThreshold: 0.05
 
-  BCWeight: 13.0
+  BCWeight: 11.0
   BCWeightDecayRate: 0.65
   BCWeightDecayThreshold: 0.1
 
@@ -123,7 +123,7 @@ Models:
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
-      Enable: true
+      Enable: false
       UseAuxValueNet: false
       Scale: 0.5
       MaxWeight: 2.5
