@@ -61,6 +61,17 @@ def eval_episodes(config,
     score_table = {"episode": [], "evaluate/score": [], "evaluate/normalised_score": []}
     for algorithm in game_benchmark_df.index[2:]:
         score_table[f"evaluate/normalised_{algorithm}_score"] = []
+        
+    episode_rams = [[] for _ in range(config.Evaluate.NumEnvs)]
+    episode_values = [[] for _ in range(config.Evaluate.NumEnvs)]
+    
+    # Store initial RAM if available (actually vec_env.reset() returns a tuple of obs, info)
+    # VecEnv returns info as a dict of arrays
+    initial_info = _ if isinstance(_, dict) else {}
+    if 'ram' in initial_info:
+        for i in range(config.Evaluate.NumEnvs):
+            episode_rams[i].append(initial_info['ram'][i, 62])
+            
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
             with torch.no_grad():
@@ -81,6 +92,13 @@ def eval_episodes(config,
                     elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
                         _, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
 
+                    # Get value for DynWeighting
+                    value_t = agent.critic(last_dist_feat)
+                    value_t = world_model.symlog_twohot_loss_func.decode(value_t).squeeze(-1)
+                    value_np = value_t.cpu().numpy()
+                    for i in range(config.Evaluate.NumEnvs):
+                        episode_values[i].append(value_np[i])
+
                     # Prior가 아닌 현재 프레임의 관측 결과(current_latent)를 바탕으로 행동 결정
                     action = agent.sample_as_env_action(
                         torch.cat([current_latent, last_dist_feat], dim=-1),
@@ -96,6 +114,13 @@ def eval_episodes(config,
             # update current_obs, current_info and sum_reward
             sum_reward += reward
             current_obs = obs
+            
+            if 'ram' in info:
+                for i in range(config.Evaluate.NumEnvs):
+                    # In VectorEnv, if done, info['ram'] might be the new episode's ram.
+                    # terminal ram might be in info['final_info'][i]['ram'].
+                    # But for simplicity, we just append info['ram']
+                    episode_rams[i].append(info['ram'][i, 62])
 
             done_flag = np.logical_or(done, truncated)
             if done_flag.any():
@@ -118,6 +143,35 @@ def eval_episodes(config,
                             else:
                                 score_table[f"evaluate/normalised_{algorithm}_score"].append(None)
 
+                        if len(episode_values[i]) > 0:
+                            val_seq = torch.tensor(episode_values[i], dtype=torch.float32, device=world_model.device).unsqueeze(0)
+                            old_enable = world_model.dyn_cfg.get("Enable", False)
+                            world_model.dyn_cfg["Enable"] = True
+                            dyn_weights = world_model.compute_dynamics_weights(None, values_sq=val_seq)
+                            world_model.dyn_cfg["Enable"] = old_enable
+                            
+                            if dyn_weights is not None:
+                                dyn_weights = dyn_weights.squeeze(0).cpu().numpy()
+                                rams = np.array(episode_rams[i])
+                                acquisition_weights = []
+                                for t in range(1, len(rams)):
+                                    if rams[t] > rams[t-1]:
+                                        if t < len(dyn_weights):
+                                            acquisition_weights.append(dyn_weights[t])
+                                        if t + 1 < len(dyn_weights):
+                                            acquisition_weights.append(dyn_weights[t+1])
+                                            
+                                if 'evaluate/acquisition_weight' not in score_table:
+                                    score_table['evaluate/acquisition_weight'] = []
+                                    score_table['evaluate/mean_weight'] = []
+                                    
+                                if len(acquisition_weights) > 0:
+                                    score_table['evaluate/acquisition_weight'].append(np.mean(acquisition_weights))
+                                score_table['evaluate/mean_weight'].append(np.mean(dyn_weights))
+                                
+                        episode_values[i] = []
+                        episode_rams[i] = []
+                        
                         sum_reward[i] = 0
                         episode_idx += 1
                         episode_pbar.update(1)  # Update the episode progress bar
