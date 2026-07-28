@@ -27,14 +27,14 @@ Demonstration:
   WorldModelDemoRatio: 0.1
 
   AgentDemoRatio: 0.0
-  AgentDemoRatioStartStep: 3000
-  AgentDemoRatioPeakStep: 4000
+  AgentDemoRatioStartStep: 4000
+  AgentDemoRatioPeakStep: 5000
   AgentDemoRatioPeak: 0.1
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
 
   DemoRatioDecayScoreMultiplier: 0.5
-  BaseEpisodeLength: 800
+  BaseEpisodeLength: 900
   DemoRatioDecayRate: 0.9
   DemoRatioDecayThreshold: 0.05
 
@@ -125,6 +125,7 @@ Models:
       AuxLam: 0.95
     DynWeighting:
       Enable: true
+      StartStep: 7000
       UseAuxValueNet: false
       Scale: 0.5
       ZScoreThreshold: 2.0

@@ -491,10 +491,11 @@ class WorldModel(nn.Module):
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
 
-    def compute_dynamics_weights(self, latent_full, values_sq=None):
+    def compute_dynamics_weights(self, latent_full, values_sq=None, global_step=None):
         """Value-diff의 z-score에 비례하는 dynamics loss 가중치를 계산합니다."""
         dyn_weighting_enable = bool(self.dyn_cfg.get("Enable", False))
-        if not dyn_weighting_enable:
+        start_step = int(self.dyn_cfg.get("StartStep", 0))
+        if not dyn_weighting_enable or (global_step is not None and global_step < start_step):
             return None, {}
             
         dyn_use_aux_value_net = bool(self.dyn_cfg.get("UseAuxValueNet", True))
@@ -868,7 +869,7 @@ class WorldModel(nn.Module):
                         values_sq = torch.zeros_like(reward_sq)
                         values_sq[:, 1:] = aligned_values.squeeze(-1) if aligned_values.dim() == 3 else aligned_values
 
-            dyn_weights, dyn_metrics = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq)
+            dyn_weights, dyn_metrics = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq, global_step=global_step)
             
             # AuxValueNet Distillation (if enabled)
             m_distill_loss = torch.tensor(0.0, device=obs.device)
