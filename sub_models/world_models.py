@@ -491,11 +491,10 @@ class WorldModel(nn.Module):
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
 
-    def compute_dynamics_weights(self, latent_full, values_sq=None, global_step=None):
+    def compute_dynamics_weights(self, latent_full, values_sq=None):
         """Value-diff의 z-score에 비례하는 dynamics loss 가중치를 계산합니다."""
         dyn_weighting_enable = bool(self.dyn_cfg.get("Enable", False))
-        start_step = int(self.dyn_cfg.get("StartStep", 0))
-        if not dyn_weighting_enable or (global_step is not None and global_step < start_step):
+        if not dyn_weighting_enable:
             return None, {}
             
         dyn_use_aux_value_net = bool(self.dyn_cfg.get("UseAuxValueNet", True))
@@ -830,7 +829,7 @@ class WorldModel(nn.Module):
 
 
     @profile
-    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None, indexes=None, replay_buffer=None, agent=None, target_metrics=None):
+    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None, indexes=None, replay_buffer=None, agent=None):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -869,7 +868,7 @@ class WorldModel(nn.Module):
                         values_sq = torch.zeros_like(reward_sq)
                         values_sq[:, 1:] = aligned_values.squeeze(-1) if aligned_values.dim() == 3 else aligned_values
 
-            dyn_weights, dyn_metrics = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq, global_step=global_step)
+            dyn_weights, dyn_metrics = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq)
             
             # AuxValueNet Distillation (if enabled)
             m_distill_loss = torch.tensor(0.0, device=obs.device)
@@ -986,24 +985,6 @@ class WorldModel(nn.Module):
                 if 'dyn_metrics' in locals() and dyn_metrics:
                     for k, v in dyn_metrics.items():
                         logger.log(f"DynWeighting/{k}", v, global_step=global_step)
-
-            if target_metrics is not None and logger is not None and target_metrics.numel() > 0:
-                b, t = target_metrics.shape[:2]
-                target_diff = target_metrics[:, 1:] - target_metrics[:, :-1]
-                
-                total_frames = b * (t - 1)
-                
-                diver_changed = (target_diff > 0).float()
-                total_changed = diver_changed.sum().item()
-                
-                logger.log("Probing/DiverChanged_TotalFrames", total_frames, global_step=global_step)
-                logger.log("Probing/DiverChanged_AnyFrames", total_changed, global_step=global_step)
-                
-                if dyn_weights is not None:
-                    trigger_mask = (dyn_weights[:, 1:] > 1.0).float()
-                    # How many frames where diver count changed ALSO got boosted by dyn_weights?
-                    diver_changed_and_triggered = (diver_changed * trigger_mask).sum().item()
-                    logger.log("Probing/DiverChanged_TriggeredFrames", diver_changed_and_triggered, global_step=global_step)
 
         # gradient descent
         self.scaler.scale(total_loss).backward()
