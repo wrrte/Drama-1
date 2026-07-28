@@ -28,9 +28,8 @@ def save_episode(data_list):
     rewards = np.array([d[2] for d in data_list], dtype=np.float32)
     # [수정] RL Value 오염 방지를 위해 변수명을 termination으로 명확히 교체
     terminations = np.array([d[3] for d in data_list], dtype=bool) 
-    rams = np.array([d[4] for d in data_list], dtype=np.uint8)
     
-    np.savez_compressed(filename, obs=observations, action=actions, reward=rewards, termination=terminations, ram=rams)
+    np.savez_compressed(filename, obs=observations, action=actions, reward=rewards, termination=terminations)
     print(f"\n[저장 완료] 에피소드가 {filename}에 저장되었습니다. (길이: {len(data_list)})")
 
 def copy_image_to_clipboard(filepath):
@@ -151,7 +150,6 @@ def manual_play_with_save(mode="rl", save_res="model", size=84):
             
             # 3. 데이터 저장 방식 선택 ('model' = 64x64, 'player' = 원본 화면 해상도)
             save_img = hi_res_img if save_res == "player" else obs
-            current_ram = env._ale.getRAM()
 
             # 4. 환경 진행
             next_obs, reward, done, next_info = env.step(action)
@@ -159,7 +157,7 @@ def manual_play_with_save(mode="rl", save_res="model", size=84):
             
             # [수정] Truncation(시간초과)과 실제 Termination(게임오버)을 분리하여 Value Function 오염 방지
             is_terminal = next_info.get('is_terminal', done)
-            episode_data.append((save_img, action, reward, is_terminal, current_ram))
+            episode_data.append((save_img, action, reward, is_terminal))
             obs = next_obs
             info = next_info
             

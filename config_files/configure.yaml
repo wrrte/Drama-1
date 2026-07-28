@@ -32,12 +32,12 @@ Demonstration:
   AgentDemoRatioEndStep: 100000
   AgentDemoRatioEnd: 0.1
 
-  DemoRatioDecayScoreMultiplier: 1.0
-  BaseEpisodeLength: 600
-  DemoRatioDecayRate: 0.85
+  DemoRatioDecayScoreMultiplier: 0.5
+  BaseEpisodeLength: 800
+  DemoRatioDecayRate: 0.9
   DemoRatioDecayThreshold: 0.05
 
-  BCWeight: 10.0
+  BCWeight: 13.0
   BCWeightDecayRate: 0.65
   BCWeightDecayThreshold: 0.1
 
@@ -123,16 +123,12 @@ Models:
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
-      Enable: false
+      Enable: true
       UseAuxValueNet: false
       Scale: 0.5
-      ZScoreThreshold: 2.0
-      TriggerMode: "increase" # both; increase; decrease
-
-      ClipMode: "fixed" # fixed; percentile
       MaxWeight: 2.5
-      ClipPercentile: 99.0
-
+      ZScoreThreshold: 2.0
+      TriggerMode: "increase" # both, increase, decrease
       ApplyToRecon: true
       ApplyToReward: false
     Adam:

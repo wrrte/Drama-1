@@ -581,11 +581,6 @@ def joint_train_world_model_agent(config, logdir,
         if config.Evaluate.DuringTraining and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
             _ = eval_episodes(config, world_model, agent, logger, total_steps)
             
-            from eval import eval_representation
-            npz_path = "demonstrations/Seaquest_20260728_193756.npz"
-            if os.path.exists(npz_path):
-                eval_representation(world_model, npz_path, logger, total_steps)
-                
             if hasattr(world_model, 'macro_loss') and hasattr(world_model.macro_loss, 'log_detailed_distribution'):
                 world_model.macro_loss.log_detailed_distribution(logger, total_steps, replay_buffer=replay_buffer)
         if config.JointTrainAgent.SaveModels and total_steps % (config.JointTrainAgent.SaveEverySteps // config.JointTrainAgent.NumEnvs) == 0:
