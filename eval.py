@@ -64,6 +64,7 @@ def eval_episodes(config,
         
     episode_rams = [[] for _ in range(config.Evaluate.NumEnvs)]
     episode_values = [[] for _ in range(config.Evaluate.NumEnvs)]
+    episode_obs = [[] for _ in range(config.Evaluate.NumEnvs)]
     
     # Store initial RAM if available (actually vec_env.reset() returns a tuple of obs, info)
     # VecEnv returns info as a dict of arrays
@@ -71,6 +72,9 @@ def eval_episodes(config,
     if 'ram' in initial_info:
         for i in range(config.Evaluate.NumEnvs):
             episode_rams[i].append(initial_info['ram'][i, 62])
+            episode_obs[i].append(current_obs[i].copy())
+            
+    collected_instances = []
             
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
@@ -93,8 +97,10 @@ def eval_episodes(config,
                         _, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
 
                     # Get value for DynWeighting
-                    value_t = agent.critic(last_dist_feat)
-                    value_t = world_model.symlog_twohot_loss_func.decode(value_t).squeeze(-1)
+                    with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=world_model.use_amp):
+                        full_latent = torch.cat([current_latent, last_dist_feat], dim=-1)
+                        value_t = agent.critic(full_latent)
+                        value_t = world_model.symlog_twohot_loss_func.decode(value_t).squeeze(-1)
                     value_np = value_t.cpu().numpy()
                     for i in range(config.Evaluate.NumEnvs):
                         episode_values[i].append(value_np[i])
@@ -121,6 +127,7 @@ def eval_episodes(config,
                     # terminal ram might be in info['final_info'][i]['ram'].
                     # But for simplicity, we just append info['ram']
                     episode_rams[i].append(info['ram'][i, 62])
+                    episode_obs[i].append(current_obs[i].copy())
 
             done_flag = np.logical_or(done, truncated)
             if done_flag.any():
@@ -161,6 +168,16 @@ def eval_episodes(config,
                                         if t + 1 < len(dyn_weights):
                                             acquisition_weights.append(dyn_weights[t+1])
                                             
+                                        if len(collected_instances) < 2:
+                                            instance_imgs = []
+                                            for offset in [-1, 0, 1, 2]:
+                                                idx = t + offset
+                                                if 0 <= idx < len(episode_obs[i]):
+                                                    instance_imgs.append(episode_obs[i][idx])
+                                                else:
+                                                    instance_imgs.append(np.zeros_like(episode_obs[i][0]))
+                                            collected_instances.append(instance_imgs)
+                                            
                                 if 'evaluate/acquisition_weight' not in score_table:
                                     score_table['evaluate/acquisition_weight'] = []
                                     score_table['evaluate/mean_weight'] = []
@@ -170,12 +187,21 @@ def eval_episodes(config,
                                 score_table['evaluate/mean_weight'].append(np.mean(dyn_weights))
                                 
                         episode_values[i] = []
-                        episode_rams[i] = []
+                        episode_rams[i] = [info['ram'][i, 62]] if 'ram' in info else []
+                        episode_obs[i] = [current_obs[i].copy()]
                         
                         sum_reward[i] = 0
                         episode_idx += 1
                         episode_pbar.update(1)  # Update the episode progress bar
                         if episode_idx == config.Evaluate.EpisodeNum:
+                            if len(collected_instances) > 0:
+                                while len(collected_instances) < 2:
+                                    collected_instances.append([np.zeros_like(collected_instances[0][0]) for _ in range(4)])
+                                row1 = np.concatenate(collected_instances[0], axis=1)
+                                row2 = np.concatenate(collected_instances[1], axis=1)
+                                stitched = np.concatenate([row1, row2], axis=0)
+                                logger.log("evaluate/acquisition_images", [stitched], global_step=global_step)
+                                
                             # print("Mean reward: " + colorama.Fore.YELLOW + f"{np.mean(score_table['evaluate/score'])}" + colorama.Style.RESET_ALL)
                             for key, value in score_table.items():
                                 if key != 'episode' and not np.array(value).any() == None:

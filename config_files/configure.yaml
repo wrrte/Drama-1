@@ -123,7 +123,7 @@ Models:
       AuxGamma: 0.985
       AuxLam: 0.95
     DynWeighting:
-      Enable: false
+      Enable: true
       StartStep: 30000
       UseAuxValueNet: false
       Scale: 0.5
