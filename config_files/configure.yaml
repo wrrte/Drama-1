@@ -124,6 +124,7 @@ Models:
       AuxLam: 0.95
     DynWeighting:
       Enable: false
+      StartStep: 30000
       UseAuxValueNet: false
       Scale: 0.5
       MaxWeight: 2.5
