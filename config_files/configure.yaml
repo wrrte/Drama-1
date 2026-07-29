@@ -45,8 +45,8 @@ Demonstration:
 JointTrainAgent:
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k
   BufferMaxLength: 100000
-  WorldModelWarmUp: 1696
-  BehaviourWarmUp: 1696
+  WorldModelWarmUp: 1984
+  BehaviourWarmUp: 1984
   NumEnvs: 1
   BatchSize: 32 # 16
   BatchLength: 128
