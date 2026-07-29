@@ -194,12 +194,13 @@ def eval_episodes(config,
                                 dyn_weights = dyn_weights.squeeze(0).cpu().numpy()
                                 rams = np.array(episode_rams[i])
                                 acquisition_weights = []
+                                temporal_window = world_model.dyn_cfg.get("TemporalWindow", [0, 1])
                                 for t in range(1, len(rams)):
                                     if rams[t] > rams[t-1]:
-                                        if t < len(dyn_weights):
-                                            acquisition_weights.append(dyn_weights[t])
-                                        if t + 1 < len(dyn_weights):
-                                            acquisition_weights.append(dyn_weights[t+1])
+                                        for offset in temporal_window:
+                                            target_t = t + offset
+                                            if 0 <= target_t < len(dyn_weights):
+                                                acquisition_weights.append(dyn_weights[target_t])
                                             
                                         if len(collected_instances) < 2:
                                             instance_imgs = []

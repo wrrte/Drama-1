@@ -871,9 +871,18 @@ class WorldModel(nn.Module):
                 diver_seq = ram_seq[..., 62] # Shape: (B, L)
                 diver_up = diver_seq[:, 1:] > diver_seq[:, :-1]
                 
-                # Extend diver_up to include the immediately following frame (t and t+1)
-                diver_up_extended = diver_up.clone()
-                diver_up_extended[:, 1:] = diver_up_extended[:, 1:] | diver_up[:, :-1]
+                temporal_window = self.dyn_cfg.get("TemporalWindow", [0, 1])
+                diver_up_extended = torch.zeros_like(dyn_weights[:, 1:], dtype=torch.bool)
+                
+                for offset in temporal_window:
+                    start_k = max(0, offset)
+                    end_k = min(diver_up.shape[1], diver_up.shape[1] + offset)
+                    
+                    start_i = max(0, -offset)
+                    end_i = min(diver_up.shape[1], diver_up.shape[1] - offset)
+                    
+                    if start_k < end_k and start_i < end_i:
+                        diver_up_extended[:, start_k:end_k] |= diver_up[:, start_i:end_i]
                 
                 # Apply 1.5x bonus to dynamics weights where diver goes up
                 dyn_weights[:, 1:] = torch.where(diver_up_extended, dyn_weights[:, 1:] * 1.5, dyn_weights[:, 1:])

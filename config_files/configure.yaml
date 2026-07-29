@@ -33,8 +33,8 @@ Demonstration:
   AgentDemoRatioEnd: 0.1
 
   DemoRatioDecayScoreMultiplier: 0.5
-  BaseEpisodeLength: 800
-  DemoRatioDecayRate: 0.9
+  BaseEpisodeLength: 600
+  DemoRatioDecayRate: 0.88
   DemoRatioDecayThreshold: 0.05
 
   BCWeight: 11.0
@@ -45,8 +45,8 @@ Demonstration:
 JointTrainAgent:
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k
   BufferMaxLength: 100000
-  WorldModelWarmUp: 1984
-  BehaviourWarmUp: 1984
+  WorldModelWarmUp: 1376
+  BehaviourWarmUp: 1376
   NumEnvs: 1
   BatchSize: 32 # 16
   BatchLength: 128
@@ -133,6 +133,7 @@ Models:
       ApplyToRecon: true
       ApplyToReward: false
       OracleDiverBonus: true
+      TemporalWindow: [0, 1]
     Adam:
       LearningRate: 1.0e-4
     Laprop:
