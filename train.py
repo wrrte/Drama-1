@@ -87,7 +87,9 @@ def _load_npz_demo(demo_path):
             termination = data['done'].copy()
         else:
             raise ValueError(f"{demo_path} must include either 'termination' or 'done'.")
-    return obs, action, reward, termination
+            
+        ram = data['ram'].copy() if 'ram' in data.files else None
+    return obs, action, reward, termination, ram
 
 def _validate_demo_actions(action_array, env, strict_action_check=True):
     if action_array.size == 0:
@@ -153,7 +155,7 @@ def preload_play_demonstrations(config, replay_buffer: ReplayBuffer, env):
             print('Replay buffer is full while loading demonstrations. Stopping preload early.')
             break
 
-        obs, action, reward, termination = _load_npz_demo(demo_path)
+        obs, action, reward, termination, ram = _load_npz_demo(demo_path)
 
         if obs.ndim != 4 or tuple(obs.shape[1:]) != expected_obs_shape:
             print(f'Warning: {demo_path} observation shape mismatch. Expected (T, {expected_obs_shape[0]}, {expected_obs_shape[1]}, {expected_obs_shape[2]}), got {obs.shape}. Skipping this file.')
@@ -162,6 +164,10 @@ def preload_play_demonstrations(config, replay_buffer: ReplayBuffer, env):
         if not (len(obs) == len(action) == len(reward) == len(termination)):
             print(f'Warning: {demo_path} has inconsistent lengths: obs={len(obs)}, action={len(action)}, reward={len(reward)}, termination={len(termination)}. Skipping.')
             continue
+            
+        if ram is not None and len(ram) != len(obs):
+            print(f'Warning: {demo_path} has inconsistent lengths for ram: ram={len(ram)}. Setting ram to None.')
+            ram = None
 
         if len(obs) == 0:
             print(f'Skipping empty demonstration file: {demo_path}')
@@ -183,7 +189,8 @@ def preload_play_demonstrations(config, replay_buffer: ReplayBuffer, env):
             print(f'Truncating {demo_path} from {len(obs)} to {steps_to_insert} steps due to replay buffer capacity.')
 
         for i in range(steps_to_insert):
-            replay_buffer.append(obs[i], float(action[i]), float(reward[i]), float(termination[i]))
+            current_ram = ram[i] if ram is not None else None
+            replay_buffer.append(obs[i], float(action[i]), float(reward[i]), float(termination[i]), ram=current_ram)
 
         total_steps += steps_to_insert
         print(colorama.Fore.GREEN + f"Loaded demo file: {os.path.basename(demo_path)}" + colorama.Style.RESET_ALL)
