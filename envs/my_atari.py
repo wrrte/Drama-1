@@ -157,11 +157,13 @@ class Atari(gym.Env):
             image = np.tensordot(image, weights, (-1, 0)).astype(image.dtype)
             image = image[:, :, None]
         if hasattr(self, '_ale'):
-            info['ram'] = self._ale.getRAM().copy()
-        
+            ram_buffer = np.zeros(128, dtype=np.uint8)
+            self._ale.getRAM(ram_buffer)
+            info['ram'] = ram_buffer        
         info['is_first'] = is_first
         info['is_terminal'] = is_terminal
         info['episode_frame_number'] //= self._repeat
+        info['raw_image'] = image.copy()
         return (
             # {"image": image, "is_terminal": is_terminal, "is_first": is_first},
             image,

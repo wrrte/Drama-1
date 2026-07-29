@@ -28,13 +28,17 @@ class RAMWrapper(gymnasium.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         if hasattr(self.unwrapped, 'ale'):
-            info['ram'] = self.unwrapped.ale.getRAM().copy()
+            ram_buffer = np.zeros(128, dtype=np.uint8)
+            self.unwrapped.ale.getRAM(ram_buffer)
+            info['ram'] = ram_buffer
         return obs, reward, terminated, truncated, info
         
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         if hasattr(self.unwrapped, 'ale'):
-            info['ram'] = self.unwrapped.ale.getRAM().copy()
+            ram_buffer = np.zeros(128, dtype=np.uint8)
+            self.unwrapped.ale.getRAM(ram_buffer)
+            info['ram'] = ram_buffer
         return obs, info
 
 
