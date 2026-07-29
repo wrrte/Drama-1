@@ -29,6 +29,7 @@ class ReplayBuffer():
             self.termination_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             self.sampled_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             self.imagined_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
+            self.ram_buffer = torch.empty((max_length, 128), dtype=torch.uint8, device=device, requires_grad=False)
         else:
             self.obs_buffer = np.empty((max_length, *obs_shape), dtype=np.uint8)
             self.action_buffer = np.empty(action_shape, dtype=np.float32)
@@ -36,6 +37,7 @@ class ReplayBuffer():
             self.termination_buffer = np.empty((max_length), dtype=np.float32)
             self.sampled_counter = np.zeros((max_length), dtype=np.int32)
             self.imagined_counter = np.zeros((max_length), dtype=np.int32)
+            self.ram_buffer = np.empty((max_length, 128), dtype=np.uint8)
 
         self.length = 0
         self.last_pointer = -1
@@ -226,8 +228,11 @@ class ReplayBuffer():
 
         return obs, action, reward, termination, indexes
 
-    def append(self, obs, action, reward, termination):
+    def append(self, obs, action, reward, termination, ram=None):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length)
+        if ram is None:
+            ram = np.zeros(128, dtype=np.uint8)
+            
         if self.store_on_gpu:
             self.obs_buffer[self.last_pointer] = torch.from_numpy(obs)
             if self.is_discrete:
@@ -240,6 +245,7 @@ class ReplayBuffer():
                 self.action_buffer[self.last_pointer] = action_tensor
             self.reward_buffer[self.last_pointer] = torch.tensor(reward, device=self.device)
             self.termination_buffer[self.last_pointer] = torch.tensor(termination, device=self.device)
+            self.ram_buffer[self.last_pointer] = torch.from_numpy(ram).to(self.device)
         else:
             self.obs_buffer[self.last_pointer] = obs
             if self.is_discrete:
@@ -251,6 +257,7 @@ class ReplayBuffer():
                 self.action_buffer[self.last_pointer] = action
             self.reward_buffer[self.last_pointer] = reward
             self.termination_buffer[self.last_pointer] = termination
+            self.ram_buffer[self.last_pointer] = ram
 
         if len(self) < self.max_length:
             self.length += 1

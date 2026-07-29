@@ -132,6 +132,7 @@ Models:
       TriggerMode: "increase" # both, increase, decrease
       ApplyToRecon: true
       ApplyToReward: false
+      OracleDiverBonus: true
     Adam:
       LearningRate: 1.0e-4
     Laprop:

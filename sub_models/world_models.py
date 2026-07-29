@@ -857,6 +857,27 @@ class WorldModel(nn.Module):
 
             dyn_weights = self.compute_dynamics_weights(flattened_sample, values_sq=values_sq, global_step=global_step)
             
+            # --- Oracle Diver Bonus ---
+            dyn_oracle_diver_bonus = bool(self.dyn_cfg.get("OracleDiverBonus", False))
+            if dyn_oracle_diver_bonus and dyn_weights is not None and replay_buffer is not None and hasattr(replay_buffer, 'ram_buffer'):
+                if isinstance(replay_buffer.ram_buffer, np.ndarray):
+                    idx_cpu = indexes.cpu().numpy()
+                    ram_seq = replay_buffer.ram_buffer[idx_cpu]
+                    ram_seq = torch.from_numpy(ram_seq).to(obs.device)
+                else:
+                    ram_seq = replay_buffer.ram_buffer[indexes]
+                
+                # Check for diver up event (diver count is at index 62)
+                diver_seq = ram_seq[..., 62] # Shape: (B, L)
+                diver_up = diver_seq[:, 1:] > diver_seq[:, :-1]
+                
+                # Extend diver_up to include the immediately following frame (t and t+1)
+                diver_up_extended = diver_up.clone()
+                diver_up_extended[:, 1:] = diver_up_extended[:, 1:] | diver_up[:, :-1]
+                
+                # Apply 1.5x bonus to dynamics weights where diver goes up
+                dyn_weights[:, 1:] = torch.where(diver_up_extended, dyn_weights[:, 1:] * 1.5, dyn_weights[:, 1:])
+            
             # AuxValueNet Distillation (if enabled)
             m_distill_loss = torch.tensor(0.0, device=obs.device)
             aux_val_linear_full = None

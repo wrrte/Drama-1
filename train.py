@@ -352,6 +352,7 @@ def joint_train_world_model_agent(config, logdir,
     
     sum_reward = 0
     current_ob, info = env.reset()
+    current_ram = info.get('ram', None)
     context_obs = deque(maxlen=config.JointTrainAgent.RealityContextLength)
     context_action = deque(maxlen=config.JointTrainAgent.RealityContextLength)
 
@@ -442,10 +443,11 @@ def joint_train_world_model_agent(config, logdir,
 
         env_start_time = time.time()
         ob, reward, is_last, info = env.step(action)
-        replay_buffer.append(current_ob, action, reward, info['is_terminal'])
+        replay_buffer.append(current_ob, action, reward, info['is_terminal'], ram=current_ram)
 
         sum_reward += reward
         current_ob = ob
+        current_ram = info.get('ram', None)
 
         if is_last:
             episode_score = float(sum_reward)
@@ -494,6 +496,8 @@ def joint_train_world_model_agent(config, logdir,
             
             sum_reward = 0
             ob, info = env.reset()
+            current_ob = ob
+            current_ram = info.get('ram', None)
             context_obs.clear()
             context_action.clear()
 
