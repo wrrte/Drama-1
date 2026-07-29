@@ -45,8 +45,8 @@ Demonstration:
 JointTrainAgent:
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k
   BufferMaxLength: 100000
-  WorldModelWarmUp: 1376
-  BehaviourWarmUp: 1376
+  WorldModelWarmUp: 1696
+  BehaviourWarmUp: 1696
   NumEnvs: 1
   BatchSize: 32 # 16
   BatchLength: 128
@@ -124,7 +124,7 @@ Models:
       AuxLam: 0.95
     DynWeighting:
       Enable: true
-      StartStep: 30000
+      StartStep: 20000
       UseAuxValueNet: false
       Scale: 0.5
       MaxWeight: 2.5
