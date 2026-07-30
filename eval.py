@@ -33,6 +33,28 @@ def process_visualize(img):
     img = cv2.resize(img, (640, 640), interpolation=cv2.INTER_AREA)
     return img
 
+class NoopResetWrapper(gymnasium.Wrapper):
+    """
+    Sample initial states by taking random number of no-ops on reset.
+    No-op is assumed to be action 0.
+    """
+    def __init__(self, env, noop_max=30):
+        super().__init__(env)
+        self.noop_max = noop_max
+        self.override_num_noops = None
+        self.noop_action = 0
+        assert env.unwrapped.get_action_meanings()[0] == 'NOOP'
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        if self.noop_max > 0:
+            noops = self.override_num_noops if self.override_num_noops is not None else np.random.randint(1, self.noop_max + 1)
+            for _ in range(noops):
+                obs, reward, terminated, truncated, info = self.env.step(self.noop_action)
+                if terminated or truncated:
+                    obs, info = self.env.reset(**kwargs)
+        return obs, info
+
 class RAMWrapper(gymnasium.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
@@ -51,20 +73,21 @@ class RAMWrapper(gymnasium.Wrapper):
         return obs, info
 
 
-def build_single_env(env_name, image_size):
+def build_single_env(env_name, image_size, noop_max=30):
     env = gymnasium.make(env_name, full_action_space=False, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
+    env = NoopResetWrapper(env, noop_max=noop_max)
     env = env_wrapper.MaxLast2FrameSkipWrapper(env, skip=4)
     env = env_wrapper.AreaResizeObservation(env, shape=image_size)
     env = RAMWrapper(env)
     return env
 
 
-def build_vec_env(env_name, image_size, num_envs):
+def build_vec_env(env_name, image_size, num_envs, noop_max=30):
     # lambda pitfall refs to: https://python.plainenglish.io/python-pitfalls-with-variable-capture-dcfc113f39b7
-    def lambda_generator(env_name, image_size):
-        return lambda: build_single_env(env_name, image_size)
+    def lambda_generator(env_name, image_size, noop_max):
+        return lambda: build_single_env(env_name, image_size, noop_max=noop_max)
     env_fns = []
-    env_fns = [lambda_generator(env_name, image_size) for i in range(num_envs)]
+    env_fns = [lambda_generator(env_name, image_size, noop_max) for i in range(num_envs)]
     vec_env = gymnasium.vector.AsyncVectorEnv(env_fns=env_fns)
     return vec_env
 
@@ -84,12 +107,12 @@ def _get_ram_62(ram_obj, i):
 
 
 
-def eval_episodes(config,
-                  world_model: WorldModel, agent: agents.ActorCriticAgent, logger: WandbLogger, global_step=None, logdir=None):
+def _run_eval_episodes(config,
+                  world_model: WorldModel, agent: agents.ActorCriticAgent, logger: WandbLogger, global_step=None, logdir=None, noop_max=0, prefix="evaluate"):
 
     world_model.eval()
     agent.eval()
-    vec_env = build_vec_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize, num_envs=config.Evaluate.NumEnvs)
+    vec_env = build_vec_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize, num_envs=config.Evaluate.NumEnvs, noop_max=noop_max)
     # print("Evaluating Env: " + colorama.Fore.YELLOW + f"{config.BasicSettings.Env_name}" + colorama.Style.RESET_ALL)
     sum_reward = np.zeros(config.Evaluate.NumEnvs)
     current_obs, _ = vec_env.reset()
@@ -101,9 +124,9 @@ def eval_episodes(config,
     game_benchmark_df = atari_benchmark_df.get(atari_pure_name)
 
     episode_idx = 0
-    score_table = {"episode": [], "evaluate/score": [], "evaluate/normalised_score": []}
+    score_table = {"episode": [], f"{prefix}/score": [], f"{prefix}/normalised_score": []}
     for algorithm in game_benchmark_df.index[2:]:
-        score_table[f"evaluate/normalised_{algorithm}_score"] = []
+        score_table[f"{prefix}/normalised_{algorithm}_score"] = []
         
     episode_rams = [[] for _ in range(config.Evaluate.NumEnvs)]
     episode_values = [[] for _ in range(config.Evaluate.NumEnvs)]
@@ -206,7 +229,7 @@ def eval_episodes(config,
                         if is_recording and i == record_env_idx:
                             is_recording = False
                             if len(recorded_frames) > 0 and logdir is not None:
-                                video_path = f"{logdir}/ckpt/eval_video_step_{global_step}.mp4"
+                                video_path = f"{logdir}/ckpt/{prefix}_video_step_{global_step}.mp4"
                                 os.makedirs(f"{logdir}/ckpt", exist_ok=True)
                                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                                 h, w = recorded_frames[0].shape[:2]
@@ -222,17 +245,17 @@ def eval_episodes(config,
 
                         
                         score_table["episode"].append(episode_idx)
-                        score_table["evaluate/score"].append(episode_score)
-                        score_table["evaluate/normalised_score"].append(normalised_score)
+                        score_table[f"{prefix}/score"].append(episode_score)
+                        score_table[f"{prefix}/normalised_score"].append(normalised_score)
 
                         for algorithm in game_benchmark_df.index[2:]:
                             denominator = game_benchmark_df[algorithm] - game_benchmark_df['Random']
                             # Check if the denominator is zero
                             if denominator != 0:
                                 normalised_score = (sum_reward[i] - game_benchmark_df['Random']) / denominator
-                                score_table[f"evaluate/normalised_{algorithm}_score"].append(normalised_score)
+                                score_table[f"{prefix}/normalised_{algorithm}_score"].append(normalised_score)
                             else:
-                                score_table[f"evaluate/normalised_{algorithm}_score"].append(None)
+                                score_table[f"{prefix}/normalised_{algorithm}_score"].append(None)
 
                         if len(episode_values[i]) > 0:
                             val_seq = torch.tensor(episode_values[i], dtype=torch.float32, device=world_model.device).unsqueeze(0)
@@ -263,13 +286,13 @@ def eval_episodes(config,
                                                     instance_imgs.append(np.zeros_like(episode_obs[i][0]))
                                             collected_instances.append(instance_imgs)
                                             
-                                if 'evaluate/acquisition_weight' not in score_table:
-                                    score_table['evaluate/acquisition_weight'] = []
-                                    score_table['evaluate/mean_weight'] = []
+                                if f'{prefix}/acquisition_weight' not in score_table:
+                                    score_table[f'{prefix}/acquisition_weight'] = []
+                                    score_table[f'{prefix}/mean_weight'] = []
                                     
                                 if len(acquisition_weights) > 0:
-                                    score_table['evaluate/acquisition_weight'].append(np.mean(acquisition_weights))
-                                score_table['evaluate/mean_weight'].append(np.mean(dyn_weights))
+                                    score_table[f'{prefix}/acquisition_weight'].append(np.mean(acquisition_weights))
+                                score_table[f'{prefix}/mean_weight'].append(np.mean(dyn_weights))
                                 
                         episode_values[i] = []
                         episode_rams[i] = [_get_ram_62(info['ram'], i)] if 'ram' in info else []
@@ -285,13 +308,25 @@ def eval_episodes(config,
                                 row1 = np.concatenate(collected_instances[0], axis=1)
                                 row2 = np.concatenate(collected_instances[1], axis=1)
                                 stitched = np.concatenate([row1, row2], axis=0)
-                                logger.log("evaluate/acquisition_images", [stitched], global_step=global_step)
+                                logger.log(f"{prefix}/acquisition_images", [stitched], global_step=global_step)
                                 
                             # print("Mean reward: " + colorama.Fore.YELLOW + f"{np.mean(score_table['evaluate/score'])}" + colorama.Style.RESET_ALL)
                             for key, value in score_table.items():
                                 if key != 'episode' and not np.array(value).any() == None:
                                     logger.log(key, np.mean(value), global_step=global_step)
                             return score_table
+
+def eval_episodes(config,
+                  world_model: WorldModel, agent: agents.ActorCriticAgent, logger: WandbLogger, global_step=None, logdir=None):
+    
+    score_table_orig = _run_eval_episodes(config, world_model, agent, logger, global_step, logdir, noop_max=0, prefix="evaluate")
+    
+    noop_max = config.Evaluate.get('NoopMax', 30)
+    if noop_max > 0:
+        score_table_noop = _run_eval_episodes(config, world_model, agent, logger, global_step, logdir, noop_max=noop_max, prefix="evaluate_noop")
+        return score_table_orig, score_table_noop
+    
+    return score_table_orig
 
 
 
