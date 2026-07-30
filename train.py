@@ -324,7 +324,8 @@ def joint_train_world_model_agent(config, logdir,
 
 
     if config.BasicSettings.Env_name.startswith('ALE'):
-        env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
+        noop_max = config.JointTrainAgent.get('NoopMax', 30) if hasattr(config, 'JointTrainAgent') else 30
+        env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed, noops=noop_max)
         is_discrete = True
     elif config.BasicSettings.Env_name.startswith('memory'):
         env = MemoryMaze(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
@@ -737,7 +738,8 @@ if __name__ == "__main__":
 
     # Init Env
     if config.BasicSettings.Env_name.startswith('ALE'):
-        env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
+        noop_max = config.JointTrainAgent.get('NoopMax', 30) if hasattr(config, 'JointTrainAgent') else 30
+        env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed, noops=noop_max)
         is_discrete = True
     elif config.BasicSettings.Env_name.startswith('memory'):
         env = MemoryMaze(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)

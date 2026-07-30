@@ -128,8 +128,8 @@ class Atari(gym.Env):
         _, info = self._env.reset()
         if self._noops:
             for _ in range(self._random.randint(self._noops)):
-                _, _, dead, _ = self._env.step(0)
-                if dead:
+                _, _, terminated, truncated, _ = self._env.step(0)
+                if terminated or truncated:
                     self._env.reset()
         self._last_lives = self._ale.lives()
         self._screen(self._buffer[0])

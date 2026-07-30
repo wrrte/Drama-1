@@ -44,6 +44,7 @@ Demonstration:
 
 
 JointTrainAgent:
+  NoopMax: 30
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k
   BufferMaxLength: 100000
   WorldModelWarmUp: 1984
