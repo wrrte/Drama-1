@@ -33,8 +33,8 @@ Demonstration:
   AgentDemoRatioEnd: 0.1
 
   DemoRatioDecayScoreMultiplier: 0.5
-  BaseEpisodeLength: 600
-  DemoRatioDecayRate: 0.88
+  BaseEpisodeLength: 666
+  DemoRatioDecayRate: 1.0
   DemoRatioDecayThreshold: 0.05
 
   BCWeight: 11.0
