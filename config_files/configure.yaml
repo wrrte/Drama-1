@@ -181,7 +181,7 @@ Models:
       NumLayers: 3    
       Gamma: 0.985
       Lambda: 0.95
-      EntropyCoef: 5.e-4
+      EntropyCoef: 3.e-4
       Max_grad_norm: 100
       Warmup_steps: 1000
       Act: SiLU
