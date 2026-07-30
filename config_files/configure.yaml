@@ -15,6 +15,7 @@ Evaluate:
    NumEnvs: 10
    DuringTraining: True
    EverySteps: 2000
+   StartAfterSteps: 3000
    NoopMax: 30
 
 Demonstration:
