@@ -142,9 +142,9 @@ def _run_eval_episodes(config,
             
     collected_instances = []
     
-    recorded_frames = []
-    record_env_idx = 0
-    is_recording = True
+    finished_episodes_frames = []
+    ongoing_frames = [[] for _ in range(config.Evaluate.NumEnvs)]
+    env_is_recording = [True for _ in range(config.Evaluate.NumEnvs)]
             
 
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
@@ -182,29 +182,30 @@ def _run_eval_episodes(config,
                         greedy=True
                     )
             
-            act_val = int(action[record_env_idx])
-
             context_obs.append(rearrange(torch.Tensor(current_obs).to(world_model.device), "B H W C -> B 1 C H W")/255)
             context_action.append(action)
 
             obs, reward, done, truncated, info = vec_env.step(action)
             
-            if is_recording:
-                frame = process_visualize(obs[record_env_idx])
-                act_str = PLAY_KEY_ACTION_MEANING.get(act_val, f"UNKNOWN({act_val})")
-                
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (10, 10), (450, 140), (0, 0, 0), -1)
-                cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-                
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                cv2.putText(frame, f"Action:     {act_str}", (20, 45), font, 1.0, (50, 255, 50), 2, cv2.LINE_AA)
-                cv2.putText(frame, f"Reward sum: {sum_reward[record_env_idx]:.0f}", (20, 85), font, 1.0, (255, 255, 50), 2, cv2.LINE_AA)
-                if 'ram' in info:
-                    diver_count = _get_ram_62(info['ram'], record_env_idx)
-                    cv2.putText(frame, f"Diver(RAM62): {diver_count}", (20, 125), font, 1.0, (50, 150, 255), 2, cv2.LINE_AA)
-                
-                recorded_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            for env_idx in range(config.Evaluate.NumEnvs):
+                if env_is_recording[env_idx]:
+                    frame = process_visualize(obs[env_idx])
+                    act_val_env = int(action[env_idx])
+                    act_str = PLAY_KEY_ACTION_MEANING.get(act_val_env, f"UNKNOWN({act_val_env})")
+                    
+                    overlay = frame.copy()
+                    cv2.rectangle(overlay, (10, 10), (450, 140), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                    
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    ep_num = len(finished_episodes_frames) + 1
+                    cv2.putText(frame, f"Ep {ep_num} Act: {act_str}", (20, 45), font, 1.0, (50, 255, 50), 2, cv2.LINE_AA)
+                    cv2.putText(frame, f"Reward sum: {sum_reward[env_idx]:.0f}", (20, 85), font, 1.0, (255, 255, 50), 2, cv2.LINE_AA)
+                    if 'ram' in info:
+                        diver_count = _get_ram_62(info['ram'], env_idx)
+                        cv2.putText(frame, f"Diver(RAM62): {diver_count}", (20, 125), font, 1.0, (50, 150, 255), 2, cv2.LINE_AA)
+                    
+                    ongoing_frames[env_idx].append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             
 
             # cv2.imshow("current_obs", process_visualize(obs[0]))
@@ -226,18 +227,10 @@ def _run_eval_episodes(config,
                 # inference_params = InferenceParams(max_seqlen=1, max_batch_size=1)
                 for i in range(config.Evaluate.NumEnvs):
                     if done_flag[i]:
-                        if is_recording and i == record_env_idx:
-                            is_recording = False
-                            if len(recorded_frames) > 0 and logdir is not None:
-                                video_path = f"{logdir}/ckpt/{prefix}_video_step_{global_step}.mp4"
-                                os.makedirs(f"{logdir}/ckpt", exist_ok=True)
-                                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                                h, w = recorded_frames[0].shape[:2]
-                                video_writer = cv2.VideoWriter(video_path, fourcc, 30.0, (w, h))
-                                for fr in recorded_frames:
-                                    # Convert RGB back to BGR for cv2
-                                    video_writer.write(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
-                                video_writer.release()
+                        if env_is_recording[i]:
+                            env_is_recording[i] = False
+                            finished_episodes_frames.append(ongoing_frames[i])
+                            ongoing_frames[i] = []
                         
                         episode_score = sum_reward[i]
                         print(f"Episode {episode_idx} (Env {i}) finished with score: {episode_score}")
@@ -302,6 +295,24 @@ def _run_eval_episodes(config,
                         episode_idx += 1
                         episode_pbar.update(1)  # Update the episode progress bar
                         if episode_idx == config.Evaluate.EpisodeNum:
+                            for j in range(config.Evaluate.NumEnvs):
+                                if env_is_recording[j] and len(ongoing_frames[j]) > 0:
+                                    finished_episodes_frames.append(ongoing_frames[j])
+                                    
+                            all_recorded_frames = []
+                            for ep_frames in finished_episodes_frames[:config.Evaluate.EpisodeNum]:
+                                all_recorded_frames.extend(ep_frames)
+                                
+                            if len(all_recorded_frames) > 0 and logdir is not None:
+                                video_path = f"{logdir}/ckpt/{prefix}_video_step_{global_step}.mp4"
+                                os.makedirs(f"{logdir}/ckpt", exist_ok=True)
+                                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                                h, w = all_recorded_frames[0].shape[:2]
+                                video_writer = cv2.VideoWriter(video_path, fourcc, 30.0, (w, h))
+                                for fr in all_recorded_frames:
+                                    video_writer.write(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
+                                video_writer.release()
+                                
                             if len(collected_instances) > 0:
                                 while len(collected_instances) < 2:
                                     collected_instances.append([np.zeros_like(collected_instances[0][0]) for _ in range(4)])
