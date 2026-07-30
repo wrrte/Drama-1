@@ -17,11 +17,20 @@ from sub_models.world_models import WorldModel
 import yaml
 from utils import WandbLogger
 import pandas as pd
+import wandb
+
+PLAY_KEY_ACTION_MEANING = {
+    0: "NOOP", 1: "FIRE", 2: "UP", 3: "RIGHT", 4: "LEFT", 5: "DOWN",
+    6: "UPRIGHT", 7: "UPLEFT", 8: "DOWNRIGHT", 9: "DOWNLEFT", 10: "UPFIRE",
+    11: "RIGHTFIRE", 12: "LEFTFIRE", 13: "DOWNFIRE", 14: "UPRIGHTFIRE",
+    15: "UPLEFTFIRE", 16: "DOWNRIGHTFIRE", 17: "DOWNLEFTFIRE",
+}
+
 
 def process_visualize(img):
     img = img.astype('uint8')
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    img = cv2.resize(img, (640, 640))
+    img = cv2.resize(img, (640, 640), interpolation=cv2.INTER_AREA)
     return img
 
 class RAMWrapper(gymnasium.Wrapper):
@@ -76,7 +85,8 @@ def _get_ram_62(ram_obj, i):
 
 
 def eval_episodes(config,
-                  world_model: WorldModel, agent: agents.ActorCriticAgent, logger: WandbLogger, global_step=None):
+                  world_model: WorldModel, agent: agents.ActorCriticAgent, logger: WandbLogger, global_step=None, logdir=None):
+
     world_model.eval()
     agent.eval()
     vec_env = build_vec_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize, num_envs=config.Evaluate.NumEnvs)
@@ -108,7 +118,12 @@ def eval_episodes(config,
             episode_obs[i].append(current_obs[i].copy())
             
     collected_instances = []
+    
+    recorded_frames = []
+    record_env_idx = 0
+    is_recording = True
             
+
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
             with torch.no_grad():
@@ -143,11 +158,32 @@ def eval_episodes(config,
                         torch.cat([current_latent, last_dist_feat], dim=-1),
                         greedy=True
                     )
+            
+            act_val = int(action[record_env_idx])
 
             context_obs.append(rearrange(torch.Tensor(current_obs).to(world_model.device), "B H W C -> B 1 C H W")/255)
             context_action.append(action)
 
             obs, reward, done, truncated, info = vec_env.step(action)
+            
+            if is_recording:
+                frame = process_visualize(obs[record_env_idx])
+                act_str = PLAY_KEY_ACTION_MEANING.get(act_val, f"UNKNOWN({act_val})")
+                
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (10, 10), (450, 140), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                cv2.putText(frame, f"Action:     {act_str}", (20, 45), font, 1.0, (50, 255, 50), 2, cv2.LINE_AA)
+                cv2.putText(frame, f"Reward sum: {sum_reward[record_env_idx]:.0f}", (20, 85), font, 1.0, (255, 255, 50), 2, cv2.LINE_AA)
+                if 'ram' in info:
+                    diver_count = _get_ram_62(info['ram'], record_env_idx)
+                    cv2.putText(frame, f"Diver(RAM62): {diver_count}", (20, 125), font, 1.0, (50, 150, 255), 2, cv2.LINE_AA)
+                
+                recorded_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            
+
             # cv2.imshow("current_obs", process_visualize(obs[0]))
             # cv2.waitKey(10)
             # update current_obs, current_info and sum_reward
@@ -167,8 +203,23 @@ def eval_episodes(config,
                 # inference_params = InferenceParams(max_seqlen=1, max_batch_size=1)
                 for i in range(config.Evaluate.NumEnvs):
                     if done_flag[i]:
+                        if is_recording and i == record_env_idx:
+                            is_recording = False
+                            if len(recorded_frames) > 0 and logdir is not None:
+                                video_path = f"{logdir}/ckpt/eval_video_step_{global_step}.mp4"
+                                os.makedirs(f"{logdir}/ckpt", exist_ok=True)
+                                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                                h, w = recorded_frames[0].shape[:2]
+                                video_writer = cv2.VideoWriter(video_path, fourcc, 30.0, (w, h))
+                                for fr in recorded_frames:
+                                    # Convert RGB back to BGR for cv2
+                                    video_writer.write(cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
+                                video_writer.release()
+                        
                         episode_score = sum_reward[i]
+                        print(f"Episode {episode_idx} (Env {i}) finished with score: {episode_score}")
                         normalised_score = (episode_score - game_benchmark_df['Random']) / (game_benchmark_df['Human'] - game_benchmark_df['Random'])
+
                         
                         score_table["episode"].append(episode_idx)
                         score_table["evaluate/score"].append(episode_score)

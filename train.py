@@ -590,7 +590,8 @@ def joint_train_world_model_agent(config, logdir,
             pass # Time logging removed at user request
 
         if config.Evaluate.DuringTraining and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
-            _ = eval_episodes(config, world_model, agent, logger, total_steps)
+            _ = eval_episodes(config, world_model, agent, logger, total_steps, logdir=logdir)
+
             
             if hasattr(world_model, 'macro_loss') and hasattr(world_model.macro_loss, 'log_detailed_distribution'):
                 world_model.macro_loss.log_detailed_distribution(logger, total_steps, replay_buffer=replay_buffer)

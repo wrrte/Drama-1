@@ -47,7 +47,7 @@ def main():
     agent = build_agent(config, action_dim, device=device)
     
     # Checkpoint path
-    ckpt_path = '/media/storage_data/ai2lab/choemj/Drama/saved_models/standard/ALE/Seaquest-v5/3ffhvhy6/ckpt'
+    ckpt_path = '/media/storage_data/ai2lab/choemj/Drama/saved_models/standard/ALE/Seaquest-v5/9ncwrs6m/ckpt'
     
     print(f"Loading checkpoint from: {ckpt_path}")
     world_model_state = torch.load(f"{ckpt_path}/world_model.pth", map_location=device)
