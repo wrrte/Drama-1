@@ -1,6 +1,7 @@
 BasicSettings:
   ImageSize: [64, 64]  # YAML pull this as tuple in Python
   ImageChannel: 3
+  FramePooling: "last_two"  # Options: "max" (all frames max), "first" (only 1st), "last_two" (max of 3rd and 4th)
   ReplayBufferOnGPU: True
   Seed: 3710
   Env_name: ALE/Pong-v5
@@ -53,7 +54,7 @@ JointTrainAgent:
   NumEnvs: 1
   BatchSize: 32 # 16
   BatchLength: 64
-  ImagineBatchSize: 1024
+  ImagineBatchSize: 32
   ImagineContextLength: 8
   ImagineBatchLength: 15
   RealityContextLength: 16

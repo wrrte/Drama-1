@@ -19,6 +19,7 @@ class Atari(gym.Env):
         length=108000,
         resize="opencv",
         seed=None,
+        frame_pooling="max",
     ):
         assert size[0] == size[1]
         assert lives in ("unused", "discount", "reset"), lives
@@ -48,6 +49,7 @@ class Atari(gym.Env):
         self._lives = lives
         self._sticky = sticky
         self._length = length
+        self._frame_pooling = frame_pooling
         self._random = np.random.RandomState(seed)
         with self.LOCK:
             self._env = gym.make(
@@ -142,7 +144,15 @@ class Atari(gym.Env):
         return obs, info
 
     def _obs(self, reward, info, is_first=False, is_last=False, is_terminal=False):
-        image = np.max(np.stack(self._buffer), axis=0)
+        if self._frame_pooling == "max":
+            image = np.max(np.stack(self._buffer), axis=0)
+        elif self._frame_pooling == "first":
+            image = self._buffer[0]
+        elif self._frame_pooling == "last_two":
+            image = np.max(np.stack(self._buffer[-2:]), axis=0)
+        else:
+            raise ValueError(f"Unknown frame pooling method: {self._frame_pooling}")
+            
         if image.shape[:2] != self._size:
             if self._resize == "opencv":
                 image = self._cv2.resize(

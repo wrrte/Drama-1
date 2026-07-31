@@ -7,9 +7,10 @@ import copy
 
 
 class MaxLast2FrameSkipWrapper(gymnasium.Wrapper):
-    def __init__(self, env, skip=4):
+    def __init__(self, env, skip=4, frame_pooling="max"):
         super().__init__(env)
         self.skip = skip
+        self.frame_pooling = frame_pooling
 
     def reset(self, **kwargs):
         obs, _ = self.env.reset(**kwargs)
@@ -27,7 +28,15 @@ class MaxLast2FrameSkipWrapper(gymnasium.Wrapper):
         if len(self.obs_buffer) == 1:
             obs = self.obs_buffer[0]
         else:
-            obs = np.max(np.stack(self.obs_buffer), axis=0)
+            if self.frame_pooling == "max":
+                obs = np.max(np.stack(self.obs_buffer), axis=0)
+            elif self.frame_pooling == "first":
+                obs = self.obs_buffer[0]
+            elif self.frame_pooling == "last_two":
+                obs_to_pool = list(self.obs_buffer)[-2:]
+                obs = np.max(np.stack(obs_to_pool), axis=0)
+            else:
+                raise ValueError(f"Unknown frame pooling method: {self.frame_pooling}")
         return obs, total_reward, done, truncated, info
 
 class AreaResizeObservation(gymnasium.ObservationWrapper):

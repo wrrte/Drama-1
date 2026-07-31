@@ -73,21 +73,21 @@ class RAMWrapper(gymnasium.Wrapper):
         return obs, info
 
 
-def build_single_env(env_name, image_size, noop_max=30):
+def build_single_env(env_name, image_size, noop_max=30, frame_pooling="max"):
     env = gymnasium.make(env_name, full_action_space=False, render_mode="rgb_array", frameskip=1, repeat_action_probability=0)
     env = NoopResetWrapper(env, noop_max=noop_max)
-    env = env_wrapper.MaxLast2FrameSkipWrapper(env, skip=4)
+    env = env_wrapper.MaxLast2FrameSkipWrapper(env, skip=4, frame_pooling=frame_pooling)
     env = env_wrapper.AreaResizeObservation(env, shape=image_size)
     env = RAMWrapper(env)
     return env
 
 
-def build_vec_env(env_name, image_size, num_envs, noop_max=30):
+def build_vec_env(env_name, image_size, num_envs, noop_max=30, frame_pooling="max"):
     # lambda pitfall refs to: https://python.plainenglish.io/python-pitfalls-with-variable-capture-dcfc113f39b7
-    def lambda_generator(env_name, image_size, noop_max):
-        return lambda: build_single_env(env_name, image_size, noop_max=noop_max)
+    def lambda_generator(env_name, image_size, noop_max, frame_pooling):
+        return lambda: build_single_env(env_name, image_size, noop_max=noop_max, frame_pooling=frame_pooling)
     env_fns = []
-    env_fns = [lambda_generator(env_name, image_size, noop_max) for i in range(num_envs)]
+    env_fns = [lambda_generator(env_name, image_size, noop_max, frame_pooling) for i in range(num_envs)]
     vec_env = gymnasium.vector.AsyncVectorEnv(env_fns=env_fns)
     return vec_env
 
@@ -112,7 +112,8 @@ def _run_eval_episodes(config,
 
     world_model.eval()
     agent.eval()
-    vec_env = build_vec_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize, num_envs=config.Evaluate.NumEnvs, noop_max=noop_max)
+    frame_pooling = config.BasicSettings.get('FramePooling', 'max') if hasattr(config.BasicSettings, 'FramePooling') else 'max'
+    vec_env = build_vec_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize, num_envs=config.Evaluate.NumEnvs, noop_max=noop_max, frame_pooling=frame_pooling)
     # print("Evaluating Env: " + colorama.Fore.YELLOW + f"{config.BasicSettings.Env_name}" + colorama.Style.RESET_ALL)
     sum_reward = np.zeros(config.Evaluate.NumEnvs)
     current_obs, _ = vec_env.reset()
@@ -367,7 +368,8 @@ if __name__ == "__main__":
     seed_np_torch(seed=config.BasicSettings.Seed)
 
     # getting action_dim with dummy env
-    dummy_env = build_single_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize)
+    frame_pooling = config.BasicSettings.get('FramePooling', 'max') if hasattr(config.BasicSettings, 'FramePooling') else 'max'
+    dummy_env = build_single_env(config.BasicSettings.Env_name, config.BasicSettings.ImageSize, frame_pooling=frame_pooling)
     action_dim = dummy_env.action_space.n
 
     # build world model and agent
