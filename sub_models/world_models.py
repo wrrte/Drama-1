@@ -1202,6 +1202,20 @@ class WorldModel(nn.Module):
                                         recon_mse = F.mse_loss(recon_obs, t).item()
                                         log_dict[f"Probing_Recon_MSE/{cat_name}_{state_val}"] = recon_mse
                                         
+                                        orig_imgs = torch.clamp(t[:, 0, :] * 255, 0, 255).permute(0, 2, 3, 1).cpu().detach().numpy().astype(np.uint8)
+                                        recon_imgs = torch.clamp(recon_obs[:, 0, :] * 255, 0, 255).permute(0, 2, 3, 1).cpu().detach().numpy().astype(np.uint8)
+                                        concatenated_images = []
+                                        max_imgs = min(8, orig_imgs.shape[0])
+                                        for idx in range(max_imgs):
+                                            concatenated_image = np.concatenate((orig_imgs[idx], recon_imgs[idx]), axis=0)
+                                            concatenated_images.append(concatenated_image)
+                                        
+                                        final_image = np.concatenate(concatenated_images, axis=1)
+                                        h, w, _ = final_image.shape
+                                        scale_factor = 4
+                                        final_image_resized = cv2.resize(final_image, (w * scale_factor, h * scale_factor), interpolation=cv2.INTER_NEAREST)
+                                        log_dict[f"Probing_Recon_Image/{cat_name}_{state_val}"] = [final_image_resized]
+                                        
                                     if cat_name in ["Diver", "IglooBlocks", "Dynamite", "Trucks", "Distance"]:
                                         if cat_name == "Distance":
                                             import re
